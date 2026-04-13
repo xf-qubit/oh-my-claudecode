@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { existsSync, mkdirSync, rmSync } from 'fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -209,6 +209,7 @@ describe('Ralph PRD-Mandatory', () => {
             acceptanceCriteria: ['It works'],
             priority: 1,
             passes: false,
+            architectVerified: false,
           },
         ],
       };
@@ -237,6 +238,7 @@ describe('Ralph PRD-Mandatory', () => {
             acceptanceCriteria: [],
             priority: 1,
             passes: true,
+            architectVerified: true,
           },
           {
             id: 'US-002',
@@ -245,6 +247,7 @@ describe('Ralph PRD-Mandatory', () => {
             acceptanceCriteria: [],
             priority: 2,
             passes: false,
+            architectVerified: false,
           },
         ],
       };
@@ -257,13 +260,26 @@ describe('Ralph PRD-Mandatory', () => {
       expect(state!.current_story_id).toBe('US-002');
     });
 
-    it('should NOT enable prd_mode when no prd.json exists', () => {
+    it('should create and enable prd_mode when no prd.json exists', () => {
       const hook = createRalphLoopHook(testDir);
       hook.startLoop(undefined, 'test prompt');
 
       const state = readRalphState(testDir);
       expect(state).not.toBeNull();
-      expect(state!.prd_mode).toBeUndefined();
+      expect(state!.prd_mode).toBe(true);
+      expect(findPrdPath(testDir)).not.toBeNull();
+    });
+
+    it('should refuse to start when an existing prd.json is invalid', () => {
+      const invalidPrdPath = join(testDir, 'prd.json');
+      mkdirSync(join(testDir, '.git'), { recursive: true });
+      writeFileSync(invalidPrdPath, '{ invalid json');
+
+      const hook = createRalphLoopHook(testDir);
+      const started = hook.startLoop(undefined, 'test prompt');
+
+      expect(started).toBe(false);
+      expect(readRalphState(testDir)).toBeNull();
     });
   });
 
@@ -392,6 +408,7 @@ describe('Ralph PRD-Mandatory', () => {
             ],
             priority: 1,
             passes: false,
+            architectVerified: false,
           },
           {
             id: 'US-002',
@@ -400,6 +417,7 @@ describe('Ralph PRD-Mandatory', () => {
             acceptanceCriteria: ['Prometheus endpoint exposes cache metrics'],
             priority: 2,
             passes: false,
+            architectVerified: false,
           },
         ],
       };

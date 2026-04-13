@@ -36,6 +36,10 @@ export interface VerificationState {
   requested_at: string;
   /** Original ralph task */
   original_task: string;
+  /** Whether this verification is gating a single story or full completion */
+  verification_scope?: 'story' | 'completion';
+  /** Story under review when verification_scope === 'story' */
+  story_id?: string;
   /** Reviewer mode to use for verification */
   critic_mode?: RalphCriticMode;
 }
@@ -158,7 +162,8 @@ export function startVerification(
   completionClaim: string,
   originalTask: string,
   criticMode?: RalphCriticMode,
-  sessionId?: string
+  sessionId?: string,
+  currentStory?: UserStory
 ): VerificationState {
   const state: VerificationState = {
     pending: true,
@@ -167,6 +172,8 @@ export function startVerification(
     max_verification_attempts: DEFAULT_MAX_VERIFICATION_ATTEMPTS,
     requested_at: new Date().toISOString(),
     original_task: originalTask,
+    verification_scope: currentStory ? 'story' : 'completion',
+    story_id: currentStory?.id,
     critic_mode: getCriticMode(criticMode)
   };
 
@@ -223,7 +230,7 @@ ${currentStory.description}
 **Acceptance Criteria to Verify:**
 ${currentStory.acceptanceCriteria.map((c, i) => `${i + 1}. ${c}`).join('\n')}
 
-IMPORTANT: Verify EACH acceptance criterion above is met. Do not verify based on general impressions — check each criterion individually with concrete evidence.
+IMPORTANT: This review gates Ralph's progression to the next story/complete state. Verify EACH acceptance criterion above is met. Do not verify based on general impressions — check each criterion individually with concrete evidence.
 ` : '';
 
   return `<ralph-verification>
@@ -284,7 +291,7 @@ ${state.original_task}
 ## INSTRUCTIONS
 
 1. Address ALL issues identified by ${criticLabel}
-2. Do NOT claim completion again until issues are fixed
+2. Do NOT claim completion again until issues are fixed${state.story_id ? `, and do not progress story ${state.story_id} until it passes review` : ''}
 3. When truly done, another ${criticLabel} verification will be triggered
 4. After ${criticLabel} approves, run \`/oh-my-claudecode:cancel\` to cleanly exit
 

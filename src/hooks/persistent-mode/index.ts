@@ -33,6 +33,9 @@ import {
   clearRalphState,
   getPrdCompletionStatus,
   getRalphContext,
+  getStory,
+  markStoryIncomplete,
+  markStoryArchitectVerified,
   readVerificationState,
   startVerification,
   recordArchitectFeedback,
@@ -669,36 +672,53 @@ async function checkRalphLoop(
   }
 
   // Check for existing verification state (architect verification in progress)
-  const verificationState = readVerificationState(workingDir, sessionId);
+  let verificationState = readVerificationState(workingDir, sessionId);
 
   if (verificationState?.pending) {
     // Verification is in progress - check for architect's response
     if (sessionId) {
       // Check for architect approval
       if (checkArchitectApprovalInTranscript(sessionId)) {
-        // Architect approved - truly complete
-        // Also deactivate ultrawork if it was active alongside ralph
-        clearVerificationState(workingDir, sessionId);
-        clearRalphState(workingDir, sessionId);
-        deactivateUltrawork(workingDir, sessionId);
-        const criticLabel = verificationState.critic_mode === 'codex'
-          ? 'Codex critic'
-          : verificationState.critic_mode === 'critic'
-            ? 'Critic'
-            : 'Architect';
-        return {
-          shouldBlock: false,
-          message: `[RALPH LOOP VERIFIED COMPLETE] ${criticLabel} verified task completion after ${state.iteration} iteration(s). Excellent work!`,
-          mode: 'none'
-        };
+        if (verificationState.verification_scope === 'story' && verificationState.story_id) {
+          markStoryArchitectVerified(workingDir, verificationState.story_id);
+          clearVerificationState(workingDir, sessionId);
+
+          const refreshedState = readRalphState(workingDir, sessionId);
+          if (refreshedState) {
+            const refreshedPrd = getPrdCompletionStatus(workingDir);
+            refreshedState.current_story_id = refreshedPrd.nextStory?.id;
+            writeRalphState(workingDir, refreshedState, sessionId);
+          }
+          verificationState = readVerificationState(workingDir, sessionId);
+        } else {
+          // Architect approved - truly complete
+          // Also deactivate ultrawork if it was active alongside ralph
+          clearVerificationState(workingDir, sessionId);
+          clearRalphState(workingDir, sessionId);
+          deactivateUltrawork(workingDir, sessionId);
+          const criticLabel = verificationState.critic_mode === 'codex'
+            ? 'Codex critic'
+            : verificationState.critic_mode === 'critic'
+              ? 'Critic'
+              : 'Architect';
+          return {
+            shouldBlock: false,
+            message: `[RALPH LOOP VERIFIED COMPLETE] ${criticLabel} verified task completion after ${state.iteration} iteration(s). Excellent work!`,
+            mode: 'none'
+          };
+        }
       }
 
       // Check for architect rejection
       const rejection = checkArchitectRejectionInTranscript(sessionId);
-      if (rejection.rejected) {
+      if (verificationState && rejection.rejected) {
+        if (verificationState.verification_scope === 'story' && verificationState.story_id) {
+          markStoryIncomplete(workingDir, verificationState.story_id, rejection.feedback);
+        }
         // Architect rejected - continue with feedback
         recordArchitectFeedback(workingDir, false, rejection.feedback, sessionId);
         const updatedVerification = readVerificationState(workingDir, sessionId);
+        verificationState = updatedVerification;
 
         if (updatedVerification) {
           const continuationPrompt = getArchitectRejectionContinuationPrompt(updatedVerification);
@@ -715,14 +735,43 @@ async function checkRalphLoop(
       }
     }
 
-    // Verification still pending - remind to run the selected reviewer
-    // Get current story for story-aware verification
-    const prdInfo = getPrdCompletionStatus(workingDir);
-    const currentStory = prdInfo.nextStory ?? undefined;
-    const verificationPrompt = getArchitectVerificationPrompt(verificationState, currentStory);
+    if (verificationState?.pending) {
+      const storyUnderReview = verificationState.story_id
+        ? getStory(workingDir, verificationState.story_id) ?? undefined
+        : undefined;
+
+      // Verification still pending - remind to run the selected reviewer
+      const verificationPrompt = getArchitectVerificationPrompt(verificationState, storyUnderReview);
+      return {
+        shouldBlock: true,
+        message: verificationPrompt,
+        mode: 'ralph',
+        metadata: {
+          iteration: state.iteration,
+          maxIterations: state.max_iterations
+        }
+      };
+    }
+  }
+
+  const prdStatus = getPrdCompletionStatus(workingDir);
+  const currentStory = state.current_story_id
+    ? getStory(workingDir, state.current_story_id)
+    : prdStatus.nextStory;
+
+  if (currentStory?.passes && currentStory.architectVerified !== true) {
+    const startedVerification = startVerification(
+      workingDir,
+      `Story ${currentStory.id} is marked passes: true and requires architect approval before Ralph can progress.`,
+      state.prompt,
+      state.critic_mode,
+      sessionId,
+      currentStory
+    );
+
     return {
       shouldBlock: true,
-      message: verificationPrompt,
+      message: getArchitectVerificationPrompt(startedVerification, currentStory),
       mode: 'ralph',
       metadata: {
         iteration: state.iteration,
@@ -731,9 +780,8 @@ async function checkRalphLoop(
     };
   }
 
-  // Check for PRD-based completion (all stories have passes: true).
+  // Check for PRD-based completion (all stories have passes: true and are architect-verified).
   // Enter a verification phase instead of clearing Ralph immediately.
-  const prdStatus = getPrdCompletionStatus(workingDir);
   if (prdStatus.hasPrd && prdStatus.allComplete) {
     const startedVerification = startVerification(
       workingDir,

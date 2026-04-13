@@ -915,9 +915,6 @@ async function processKeywordDetector(input: HookInput): Promise<HookOutput> {
         // Lazy-load ralph module
         const {
           createRalphLoopHook,
-          findPrdPath: findPrd,
-          initPrd: initPrdFn,
-          initProgress: initProgressFn,
           detectNoPrdFlag: detectNoPrd,
           stripNoPrdFlag: stripNoPrd,
           detectCriticModeFlag,
@@ -932,32 +929,15 @@ async function processKeywordDetector(input: HookInput): Promise<HookOutput> {
           ? stripNoPrd(promptWithoutCriticFlag)
           : promptWithoutCriticFlag;
 
-        // Auto-generate scaffold PRD if none exists and --no-prd not set
-        const existingPrd = findPrd(directory);
-        if (!noPrd && !existingPrd) {
-          const { basename } = await import("path");
-          const { execSync } = await import("child_process");
-          const projectName = basename(directory);
-          let branchName = "ralph/task";
-          try {
-            branchName = execSync("git rev-parse --abbrev-ref HEAD", {
-              cwd: directory,
-              encoding: "utf-8",
-              timeout: 5000,
-            }).trim();
-          } catch {
-            // Not a git repo or git not available — use fallback
-          }
-          initPrdFn(directory, projectName, branchName, cleanPrompt);
-          initProgressFn(directory);
-        }
-
         // Activate ralph state which also auto-activates ultrawork
         const hook = createRalphLoopHook(directory);
         const started = hook.startLoop(
           sessionId,
           cleanPrompt,
-          criticMode ? { criticMode } : undefined,
+          {
+            disablePrd: noPrd,
+            ...(criticMode ? { criticMode } : {}),
+          },
         );
         if (started) {
           markModeAwaitingConfirmation(directory, sessionId, 'ralph', 'ultrawork');
@@ -1958,9 +1938,6 @@ async function processPostToolUse(input: HookInput): Promise<HookOutput> {
     if (skillName === "ralph") {
       const {
         createRalphLoopHook,
-        findPrdPath: findPrd,
-        initPrd: initPrdFn,
-        initProgress: initProgressFn,
         detectNoPrdFlag: detectNoPrd,
         stripNoPrdFlag: stripNoPrd,
         detectCriticModeFlag,
@@ -1979,31 +1956,14 @@ async function processPostToolUse(input: HookInput): Promise<HookOutput> {
         ? stripNoPrd(promptWithoutCriticFlag)
         : promptWithoutCriticFlag;
 
-      // Auto-generate scaffold PRD if none exists and --no-prd not set
-      const existingPrd = findPrd(directory);
-      if (!noPrd && !existingPrd) {
-        const { basename } = await import("path");
-        const { execSync } = await import("child_process");
-        const projectName = basename(directory);
-        let branchName = "ralph/task";
-        try {
-          branchName = execSync("git rev-parse --abbrev-ref HEAD", {
-            cwd: directory,
-            encoding: "utf-8",
-            timeout: 5000,
-          }).trim();
-        } catch {
-          // Not a git repo or git not available — use fallback
-        }
-        initPrdFn(directory, projectName, branchName, cleanPrompt);
-        initProgressFn(directory);
-      }
-
       const hook = createRalphLoopHook(directory);
       hook.startLoop(
         input.sessionId,
         cleanPrompt,
-        criticMode ? { criticMode } : undefined,
+        {
+          disablePrd: noPrd,
+          ...(criticMode ? { criticMode } : {}),
+        },
       );
     }
 
