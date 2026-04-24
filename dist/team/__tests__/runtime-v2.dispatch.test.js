@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { promisify } from 'util';
+import { execFileSync } from 'child_process';
 import { tmpdir } from 'os';
 import { listDispatchRequests } from '../dispatch-queue.js';
 const mocks = vi.hoisted(() => ({
@@ -44,13 +45,17 @@ vi.mock('../model-contract.js', () => ({
     getPromptModeArgs: modelContractMocks.getPromptModeArgs,
     resolveClaudeWorkerModel: vi.fn(() => undefined),
 }));
-vi.mock('../tmux-session.js', () => ({
-    createTeamSession: mocks.createTeamSession,
-    spawnWorkerInPane: mocks.spawnWorkerInPane,
-    sendToWorker: mocks.sendToWorker,
-    waitForPaneReady: mocks.waitForPaneReady,
-    applyMainVerticalLayout: mocks.applyMainVerticalLayout,
-}));
+vi.mock('../tmux-session.js', async (importOriginal) => {
+    const actual = await importOriginal();
+    return {
+        ...actual,
+        createTeamSession: mocks.createTeamSession,
+        spawnWorkerInPane: mocks.spawnWorkerInPane,
+        sendToWorker: mocks.sendToWorker,
+        waitForPaneReady: mocks.waitForPaneReady,
+        applyMainVerticalLayout: mocks.applyMainVerticalLayout,
+    };
+});
 describe('runtime v2 startup inbox dispatch', () => {
     let cwd;
     const originalCwd = process.cwd();
@@ -146,6 +151,42 @@ describe('runtime v2 startup inbox dispatch', () => {
             }),
         }));
         expect(mocks.applyMainVerticalLayout).toHaveBeenCalledWith('dispatch-session');
+    });
+    it('persists runtime-v2 worktree contract fields for split-pane teams', async () => {
+        cwd = await mkdtemp(join(tmpdir(), 'omc-runtime-v2-worktree-contract-'));
+        execFileSync('git', ['init'], { cwd, stdio: 'pipe' });
+        execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd, stdio: 'pipe' });
+        execFileSync('git', ['config', 'user.name', 'Test User'], { cwd, stdio: 'pipe' });
+        await writeFile(join(cwd, 'README.md'), 'worktree contract test\n', 'utf-8');
+        execFileSync('git', ['add', 'README.md'], { cwd, stdio: 'pipe' });
+        execFileSync('git', ['commit', '-m', 'initial'], { cwd, stdio: 'pipe' });
+        const { startTeamV2 } = await import('../runtime-v2.js');
+        const runtime = await startTeamV2({
+            teamName: 'dispatch-team',
+            workerCount: 1,
+            agentTypes: ['claude'],
+            pluginConfig: { team: { ops: { worktreeMode: 'named' } } },
+            tasks: [{ subject: 'Worktree contract', description: 'Verify runtime-v2 worktree metadata' }],
+            cwd,
+        });
+        expect(runtime.ownsWindow).toBe(false);
+        expect(runtime.config.workspace_mode).toBe('worktree');
+        expect(runtime.config.worktree_mode).toBe('named');
+        expect(runtime.config.workers[0]).toMatchObject({
+            working_dir: join(cwd, '.omc', 'team', 'dispatch-team', 'worktrees', 'worker-1'),
+            worktree_repo_root: cwd,
+            worktree_branch: 'omc-team/dispatch-team/worker-1',
+            worktree_detached: false,
+            worktree_created: true,
+        });
+        const configPath = join(cwd, '.omc', 'state', 'team', 'dispatch-team', 'config.json');
+        const manifestPath = join(cwd, '.omc', 'state', 'team', 'dispatch-team', 'manifest.json');
+        const persisted = JSON.parse(await readFile(configPath, 'utf-8'));
+        const manifest = JSON.parse(await readFile(manifestPath, 'utf-8'));
+        expect(persisted.workspace_mode).toBe('worktree');
+        expect(persisted.worktree_mode).toBe('named');
+        expect(manifest.workspace_mode).toBe('worktree');
+        expect(manifest.worktree_mode).toBe('named');
     });
     it('uses owner-aware startup allocation when task owners are provided', async () => {
         cwd = await mkdtemp(join(tmpdir(), 'omc-runtime-v2-owner-startup-'));

@@ -626,7 +626,8 @@ export async function startTeamV2(config) {
         resize_hook_name: null,
         resize_hook_target: null,
         resolved_routing: resolvedRouting,
-        ...(ownsWindow ? { workspace_mode: 'single', worktree_mode: 'disabled' } : {}),
+        workspace_mode: workspaceMode,
+        worktree_mode: worktreeMode,
     };
     await saveTeamConfig(teamConfig, leaderCwd);
     const permissionsSnapshot = {

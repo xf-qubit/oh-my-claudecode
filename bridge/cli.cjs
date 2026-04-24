@@ -30160,7 +30160,7 @@ function isInsideGitRepo(repoRoot) {
   }
 }
 function assertCleanLeaderWorktree(repoRoot) {
-  const status = git(repoRoot, ["status", "--porcelain"]);
+  const status = git(repoRoot, ["status", "--porcelain"]).split("\n").filter((line) => line.trim() !== "" && !/^\?\? \.omc(?:\/|$)/.test(line)).join("\n").trim();
   if (status.length > 0) {
     const error2 = new Error("leader_worktree_dirty: commit, stash, or clean changes before enabling team worktree mode");
     error2.code = "leader_worktree_dirty";
@@ -31335,7 +31335,8 @@ async function startTeamV2(config2) {
     resize_hook_name: null,
     resize_hook_target: null,
     resolved_routing: resolvedRouting,
-    ...ownsWindow ? { workspace_mode: "single", worktree_mode: "disabled" } : {}
+    workspace_mode: workspaceMode,
+    worktree_mode: worktreeMode
   };
   await saveTeamConfig(teamConfig, leaderCwd);
   const permissionsSnapshot = {
