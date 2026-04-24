@@ -34,6 +34,14 @@ export interface CleanupTeamWorktreesResult {
 export declare function getWorktreePath(repoRoot: string, teamName: string, workerName: string): string;
 /** Get branch name for a worker. */
 export declare function getBranchName(teamName: string, workerName: string): string;
+/**
+ * Install the worker overlay into the worktree root so Codex/Claude sees the
+ * team contract through normal AGENTS.md discovery. Existing root instructions
+ * are backed up under leader-owned state and restored by cleanup when unchanged.
+ */
+export declare function installWorktreeRootAgents(teamName: string, workerName: string, repoRoot: string, worktreePath: string, content: string): void;
+/** Restore or remove a managed worktree-root AGENTS.md before worktree cleanup. */
+export declare function restoreWorktreeRootAgents(teamName: string, workerName: string, repoRoot: string, worktreePath: string): void;
 export declare function normalizeTeamWorktreeMode(value: unknown): TeamWorktreeMode;
 /**
  * Ensure a worker worktree exists according to the selected opt-in mode.

@@ -30215,6 +30215,95 @@ function getMetadataPath(repoRoot, teamName) {
 function getLegacyMetadataPath(repoRoot, teamName) {
   return (0, import_node_path7.join)(repoRoot, ".omc", "state", "team-bridge", sanitizeName(teamName), "worktrees.json");
 }
+function getWorkerStateDir(repoRoot, teamName, workerName2) {
+  return (0, import_node_path7.join)(repoRoot, ".omc", "state", "team", sanitizeName(teamName), "workers", sanitizeName(workerName2));
+}
+function getAgentsRecordPath(repoRoot, teamName, workerName2) {
+  return (0, import_node_path7.join)(getWorkerStateDir(repoRoot, teamName, workerName2), "worktree-root-agents.json");
+}
+function getAgentsBackupPath(repoRoot, teamName, workerName2) {
+  return (0, import_node_path7.join)(getWorkerStateDir(repoRoot, teamName, workerName2), "worktree-root-AGENTS.md.backup");
+}
+function hashContent(content) {
+  return (0, import_node_crypto2.createHash)("sha256").update(content).digest("hex");
+}
+function readAgentsRecord(repoRoot, teamName, workerName2) {
+  const recordPath = getAgentsRecordPath(repoRoot, teamName, workerName2);
+  if (!(0, import_node_fs6.existsSync)(recordPath)) return null;
+  try {
+    return JSON.parse((0, import_node_fs6.readFileSync)(recordPath, "utf-8"));
+  } catch {
+    return null;
+  }
+}
+function removeFileIfExists2(path22) {
+  try {
+    if ((0, import_node_fs6.existsSync)(path22)) (0, import_node_fs6.unlinkSync)(path22);
+  } catch {
+  }
+}
+function installWorktreeRootAgents(teamName, workerName2, repoRoot, worktreePath, content) {
+  validateResolvedPath(worktreePath, repoRoot);
+  const agentsPath = (0, import_node_path7.join)(worktreePath, "AGENTS.md");
+  validateResolvedPath(agentsPath, repoRoot);
+  const stateDir = getWorkerStateDir(repoRoot, teamName, workerName2);
+  ensureDirWithMode(stateDir);
+  const backupPath = getAgentsBackupPath(repoRoot, teamName, workerName2);
+  const recordPath = getAgentsRecordPath(repoRoot, teamName, workerName2);
+  const previous = readAgentsRecord(repoRoot, teamName, workerName2);
+  const currentExists = (0, import_node_fs6.existsSync)(agentsPath);
+  const currentContent = currentExists ? (0, import_node_fs6.readFileSync)(agentsPath, "utf-8") : "";
+  let hadOriginal = currentExists;
+  if (previous) {
+    if (currentExists && hashContent(currentContent) !== previous.installedHash) {
+      const error2 = new Error(`worktree_dirty: preserving edited worktree-root AGENTS.md at ${agentsPath}`);
+      error2.code = "worktree_dirty";
+      throw error2;
+    }
+    hadOriginal = previous.hadOriginal;
+  } else if (currentExists) {
+    (0, import_node_fs6.writeFileSync)(backupPath, currentContent, "utf-8");
+  } else {
+    removeFileIfExists2(backupPath);
+  }
+  (0, import_node_fs6.writeFileSync)(agentsPath, content, "utf-8");
+  atomicWriteJson2(recordPath, {
+    workerName: workerName2,
+    worktreePath,
+    agentsPath,
+    backupPath,
+    hadOriginal,
+    installedHash: hashContent(content),
+    installedAt: (/* @__PURE__ */ new Date()).toISOString()
+  });
+}
+function restoreWorktreeRootAgents(teamName, workerName2, repoRoot, worktreePath) {
+  const record2 = readAgentsRecord(repoRoot, teamName, workerName2);
+  if (!record2) return;
+  validateResolvedPath(worktreePath, repoRoot);
+  const agentsPath = (0, import_node_path7.join)(worktreePath, "AGENTS.md");
+  validateResolvedPath(agentsPath, repoRoot);
+  if ((0, import_node_fs6.existsSync)(agentsPath)) {
+    const current = (0, import_node_fs6.readFileSync)(agentsPath, "utf-8");
+    if (hashContent(current) !== record2.installedHash) {
+      const error2 = new Error(`worktree_dirty: preserving edited worktree-root AGENTS.md at ${agentsPath}`);
+      error2.code = "worktree_dirty";
+      throw error2;
+    }
+  }
+  if (record2.hadOriginal) {
+    if (!(0, import_node_fs6.existsSync)(record2.backupPath)) {
+      const error2 = new Error(`worktree_agents_backup_missing: ${record2.backupPath}`);
+      error2.code = "worktree_agents_backup_missing";
+      throw error2;
+    }
+    (0, import_node_fs6.writeFileSync)(agentsPath, (0, import_node_fs6.readFileSync)(record2.backupPath, "utf-8"), "utf-8");
+  } else {
+    removeFileIfExists2(agentsPath);
+  }
+  removeFileIfExists2(getAgentsRecordPath(repoRoot, teamName, workerName2));
+  removeFileIfExists2(record2.backupPath);
+}
 function readMetadata(repoRoot, teamName) {
   const paths = [getMetadataPath(repoRoot, teamName), getLegacyMetadataPath(repoRoot, teamName)];
   const byWorker = /* @__PURE__ */ new Map();
@@ -30336,6 +30425,9 @@ function ensureWorkerWorktree(teamName, workerName2, repoRoot, options = {}) {
 function removeWorkerWorktree(teamName, workerName2, repoRoot) {
   const wtPath = getWorktreePath(repoRoot, teamName, workerName2);
   const branch = getBranchName(teamName, workerName2);
+  if ((0, import_node_fs6.existsSync)(wtPath)) {
+    restoreWorktreeRootAgents(teamName, workerName2, repoRoot, wtPath);
+  }
   if ((0, import_node_fs6.existsSync)(wtPath) && isWorktreeDirty(wtPath)) {
     const error2 = new Error(`worktree_dirty: preserving dirty worker worktree at ${wtPath}`);
     error2.code = "worktree_dirty";
@@ -30375,13 +30467,14 @@ function cleanupTeamWorktrees(teamName, repoRoot) {
   }
   return { removed, preserved };
 }
-var import_node_fs6, import_node_path7, import_node_child_process6;
+var import_node_fs6, import_node_path7, import_node_child_process6, import_node_crypto2;
 var init_git_worktree = __esm({
   "src/team/git-worktree.ts"() {
     "use strict";
     import_node_fs6 = require("node:fs");
     import_node_path7 = require("node:path");
     import_node_child_process6 = require("node:child_process");
+    import_node_crypto2 = require("node:crypto");
     init_fs_utils();
     init_tmux_session();
     init_file_lock();
@@ -31276,7 +31369,7 @@ async function startTeamV2(config2) {
     const wName = workerNames[i];
     const agentType = agentTypes[i % agentTypes.length] ?? agentTypes[0] ?? "claude";
     await ensureWorkerStateDir(sanitized, wName, leaderCwd);
-    await writeWorkerOverlay({
+    const overlayPath = await writeWorkerOverlay({
       teamName: sanitized,
       workerName: wName,
       agentType,
@@ -31288,6 +31381,10 @@ async function startTeamV2(config2) {
       cwd: leaderCwd,
       ...config2.rolePrompt ? { bootstrapInstructions: config2.rolePrompt } : {}
     });
+    const worktree = workerWorktrees.get(wName);
+    if (worktree) {
+      installWorktreeRootAgents(sanitized, wName, leaderCwd, worktree.path, await (0, import_promises13.readFile)(overlayPath, "utf-8"));
+    }
   }
   const session = await createTeamSession(sanitized, 0, leaderCwd, {
     newWindow: Boolean(config2.newWindow)
@@ -31488,7 +31585,7 @@ async function requeueDeadWorkerTasks(teamName, deadWorkerNames, cwd2) {
     await writeFile6(sidecarPath, JSON.stringify(sidecar, null, 2), "utf-8");
     const taskPath2 = absPath(cwd2, TeamPaths.taskFile(sanitized, task.id));
     try {
-      const { readFileSync: readFileSync90, writeFileSync: writeFileSync37 } = await import("fs");
+      const { readFileSync: readFileSync90, writeFileSync: writeFileSync38 } = await import("fs");
       const { withFileLockSync: withFileLockSync2 } = await Promise.resolve().then(() => (init_file_lock(), file_lock_exports));
       withFileLockSync2(taskPath2 + ".lock", () => {
         const raw = readFileSync90(taskPath2, "utf-8");
@@ -31497,7 +31594,7 @@ async function requeueDeadWorkerTasks(teamName, deadWorkerNames, cwd2) {
           taskData.status = "pending";
           taskData.owner = void 0;
           taskData.claim = void 0;
-          writeFileSync37(taskPath2, JSON.stringify(taskData, null, 2), "utf-8");
+          writeFileSync38(taskPath2, JSON.stringify(taskData, null, 2), "utf-8");
           requeued.push(task.id);
         }
       });
@@ -31521,7 +31618,7 @@ async function processCliWorkerVerdicts(teamName, cwd2) {
     "team.runtime-v2.processCliWorkerVerdicts appendTeamEvent failed"
   );
   const { rename: rename3 } = await import("fs/promises");
-  const { readFileSync: readFileSync90, writeFileSync: writeFileSync37, existsSync: fsExistsSync } = await import("fs");
+  const { readFileSync: readFileSync90, writeFileSync: writeFileSync38, existsSync: fsExistsSync } = await import("fs");
   const { withFileLockSync: withFileLockSync2 } = await Promise.resolve().then(() => (init_file_lock(), file_lock_exports));
   for (const worker of config2.workers) {
     const outputFile = worker.output_file;
@@ -31603,7 +31700,7 @@ async function processCliWorkerVerdicts(teamName, cwd2) {
         if (terminalStatus === "failed") {
           taskData.error = `cli_worker_verdict:${payload.verdict}:${payload.summary}`;
         }
-        writeFileSync37(targetTaskPath, JSON.stringify(taskData, null, 2), "utf-8");
+        writeFileSync38(targetTaskPath, JSON.stringify(taskData, null, 2), "utf-8");
         transitionOk = true;
       });
     } catch {

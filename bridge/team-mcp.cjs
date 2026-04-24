@@ -17775,7 +17775,7 @@ var StdioServerTransport = class {
 };
 
 // src/mcp/team-server.ts
-var import_node_crypto = require("node:crypto");
+var import_node_crypto2 = require("node:crypto");
 var import_child_process3 = require("child_process");
 var import_path7 = require("path");
 var import_url = require("url");
@@ -18207,6 +18207,7 @@ var import_path4 = require("path");
 var import_node_fs = require("node:fs");
 var import_node_path = require("node:path");
 var import_node_child_process = require("node:child_process");
+var import_node_crypto = require("node:crypto");
 
 // src/team/fs-utils.ts
 var import_fs2 = require("fs");
@@ -18453,6 +18454,57 @@ function getMetadataPath(repoRoot, teamName) {
 function getLegacyMetadataPath(repoRoot, teamName) {
   return (0, import_node_path.join)(repoRoot, ".omc", "state", "team-bridge", sanitizeName(teamName), "worktrees.json");
 }
+function getWorkerStateDir(repoRoot, teamName, workerName) {
+  return (0, import_node_path.join)(repoRoot, ".omc", "state", "team", sanitizeName(teamName), "workers", sanitizeName(workerName));
+}
+function getAgentsRecordPath(repoRoot, teamName, workerName) {
+  return (0, import_node_path.join)(getWorkerStateDir(repoRoot, teamName, workerName), "worktree-root-agents.json");
+}
+function hashContent(content) {
+  return (0, import_node_crypto.createHash)("sha256").update(content).digest("hex");
+}
+function readAgentsRecord(repoRoot, teamName, workerName) {
+  const recordPath = getAgentsRecordPath(repoRoot, teamName, workerName);
+  if (!(0, import_node_fs.existsSync)(recordPath)) return null;
+  try {
+    return JSON.parse((0, import_node_fs.readFileSync)(recordPath, "utf-8"));
+  } catch {
+    return null;
+  }
+}
+function removeFileIfExists(path4) {
+  try {
+    if ((0, import_node_fs.existsSync)(path4)) (0, import_node_fs.unlinkSync)(path4);
+  } catch {
+  }
+}
+function restoreWorktreeRootAgents(teamName, workerName, repoRoot, worktreePath) {
+  const record2 = readAgentsRecord(repoRoot, teamName, workerName);
+  if (!record2) return;
+  validateResolvedPath(worktreePath, repoRoot);
+  const agentsPath = (0, import_node_path.join)(worktreePath, "AGENTS.md");
+  validateResolvedPath(agentsPath, repoRoot);
+  if ((0, import_node_fs.existsSync)(agentsPath)) {
+    const current = (0, import_node_fs.readFileSync)(agentsPath, "utf-8");
+    if (hashContent(current) !== record2.installedHash) {
+      const error2 = new Error(`worktree_dirty: preserving edited worktree-root AGENTS.md at ${agentsPath}`);
+      error2.code = "worktree_dirty";
+      throw error2;
+    }
+  }
+  if (record2.hadOriginal) {
+    if (!(0, import_node_fs.existsSync)(record2.backupPath)) {
+      const error2 = new Error(`worktree_agents_backup_missing: ${record2.backupPath}`);
+      error2.code = "worktree_agents_backup_missing";
+      throw error2;
+    }
+    (0, import_node_fs.writeFileSync)(agentsPath, (0, import_node_fs.readFileSync)(record2.backupPath, "utf-8"), "utf-8");
+  } else {
+    removeFileIfExists(agentsPath);
+  }
+  removeFileIfExists(getAgentsRecordPath(repoRoot, teamName, workerName));
+  removeFileIfExists(record2.backupPath);
+}
 function readMetadata(repoRoot, teamName) {
   const paths = [getMetadataPath(repoRoot, teamName), getLegacyMetadataPath(repoRoot, teamName)];
   const byWorker = /* @__PURE__ */ new Map();
@@ -18485,6 +18537,9 @@ function forgetMetadata(repoRoot, teamName, workerName) {
 function removeWorkerWorktree(teamName, workerName, repoRoot) {
   const wtPath = getWorktreePath(repoRoot, teamName, workerName);
   const branch = getBranchName(teamName, workerName);
+  if ((0, import_node_fs.existsSync)(wtPath)) {
+    restoreWorktreeRootAgents(teamName, workerName, repoRoot, wtPath);
+  }
   if ((0, import_node_fs.existsSync)(wtPath) && isWorktreeDirty(wtPath)) {
     const error2 = new Error(`worktree_dirty: preserving dirty worker worktree at ${wtPath}`);
     error2.code = "worktree_dirty";
@@ -18826,7 +18881,7 @@ async function handleStart(args) {
   }
   const input = startSchema.parse(args);
   validateTeamName(input.teamName);
-  const jobId = `omc-${Date.now().toString(36)}${(0, import_node_crypto.randomUUID)().slice(0, 8)}`;
+  const jobId = `omc-${Date.now().toString(36)}${(0, import_node_crypto2.randomUUID)().slice(0, 8)}`;
   const runtimeCliPath = (0, import_path7.join)(__ownDir, "runtime-cli.cjs");
   const job = { status: "running", startedAt: Date.now(), teamName: input.teamName, cwd: input.cwd };
   omcTeamJobs.set(jobId, job);

@@ -4972,9 +4972,10 @@ var init_file_lock = __esm({
 });
 
 // src/team/git-worktree.ts
-import { existsSync as existsSync10, readFileSync as readFileSync7, rmSync as rmSync2 } from "node:fs";
+import { existsSync as existsSync10, readFileSync as readFileSync7, rmSync as rmSync2, unlinkSync as unlinkSync4, writeFileSync as writeFileSync2 } from "node:fs";
 import { join as join15, resolve as resolve3 } from "node:path";
 import { execFileSync as execFileSync3 } from "node:child_process";
+import { createHash } from "node:crypto";
 function getWorktreePath(repoRoot, teamName, workerName) {
   return join15(repoRoot, ".omc", "team", sanitizeName(teamName), "worktrees", sanitizeName(workerName));
 }
@@ -5047,6 +5048,95 @@ function getMetadataPath(repoRoot, teamName) {
 }
 function getLegacyMetadataPath(repoRoot, teamName) {
   return join15(repoRoot, ".omc", "state", "team-bridge", sanitizeName(teamName), "worktrees.json");
+}
+function getWorkerStateDir(repoRoot, teamName, workerName) {
+  return join15(repoRoot, ".omc", "state", "team", sanitizeName(teamName), "workers", sanitizeName(workerName));
+}
+function getAgentsRecordPath(repoRoot, teamName, workerName) {
+  return join15(getWorkerStateDir(repoRoot, teamName, workerName), "worktree-root-agents.json");
+}
+function getAgentsBackupPath(repoRoot, teamName, workerName) {
+  return join15(getWorkerStateDir(repoRoot, teamName, workerName), "worktree-root-AGENTS.md.backup");
+}
+function hashContent(content) {
+  return createHash("sha256").update(content).digest("hex");
+}
+function readAgentsRecord(repoRoot, teamName, workerName) {
+  const recordPath = getAgentsRecordPath(repoRoot, teamName, workerName);
+  if (!existsSync10(recordPath)) return null;
+  try {
+    return JSON.parse(readFileSync7(recordPath, "utf-8"));
+  } catch {
+    return null;
+  }
+}
+function removeFileIfExists(path4) {
+  try {
+    if (existsSync10(path4)) unlinkSync4(path4);
+  } catch {
+  }
+}
+function installWorktreeRootAgents(teamName, workerName, repoRoot, worktreePath, content) {
+  validateResolvedPath(worktreePath, repoRoot);
+  const agentsPath = join15(worktreePath, "AGENTS.md");
+  validateResolvedPath(agentsPath, repoRoot);
+  const stateDir = getWorkerStateDir(repoRoot, teamName, workerName);
+  ensureDirWithMode(stateDir);
+  const backupPath = getAgentsBackupPath(repoRoot, teamName, workerName);
+  const recordPath = getAgentsRecordPath(repoRoot, teamName, workerName);
+  const previous = readAgentsRecord(repoRoot, teamName, workerName);
+  const currentExists = existsSync10(agentsPath);
+  const currentContent = currentExists ? readFileSync7(agentsPath, "utf-8") : "";
+  let hadOriginal = currentExists;
+  if (previous) {
+    if (currentExists && hashContent(currentContent) !== previous.installedHash) {
+      const error = new Error(`worktree_dirty: preserving edited worktree-root AGENTS.md at ${agentsPath}`);
+      error.code = "worktree_dirty";
+      throw error;
+    }
+    hadOriginal = previous.hadOriginal;
+  } else if (currentExists) {
+    writeFileSync2(backupPath, currentContent, "utf-8");
+  } else {
+    removeFileIfExists(backupPath);
+  }
+  writeFileSync2(agentsPath, content, "utf-8");
+  atomicWriteJson(recordPath, {
+    workerName,
+    worktreePath,
+    agentsPath,
+    backupPath,
+    hadOriginal,
+    installedHash: hashContent(content),
+    installedAt: (/* @__PURE__ */ new Date()).toISOString()
+  });
+}
+function restoreWorktreeRootAgents(teamName, workerName, repoRoot, worktreePath) {
+  const record = readAgentsRecord(repoRoot, teamName, workerName);
+  if (!record) return;
+  validateResolvedPath(worktreePath, repoRoot);
+  const agentsPath = join15(worktreePath, "AGENTS.md");
+  validateResolvedPath(agentsPath, repoRoot);
+  if (existsSync10(agentsPath)) {
+    const current = readFileSync7(agentsPath, "utf-8");
+    if (hashContent(current) !== record.installedHash) {
+      const error = new Error(`worktree_dirty: preserving edited worktree-root AGENTS.md at ${agentsPath}`);
+      error.code = "worktree_dirty";
+      throw error;
+    }
+  }
+  if (record.hadOriginal) {
+    if (!existsSync10(record.backupPath)) {
+      const error = new Error(`worktree_agents_backup_missing: ${record.backupPath}`);
+      error.code = "worktree_agents_backup_missing";
+      throw error;
+    }
+    writeFileSync2(agentsPath, readFileSync7(record.backupPath, "utf-8"), "utf-8");
+  } else {
+    removeFileIfExists(agentsPath);
+  }
+  removeFileIfExists(getAgentsRecordPath(repoRoot, teamName, workerName));
+  removeFileIfExists(record.backupPath);
 }
 function readMetadata(repoRoot, teamName) {
   const paths = [getMetadataPath(repoRoot, teamName), getLegacyMetadataPath(repoRoot, teamName)];
@@ -5169,6 +5259,9 @@ function ensureWorkerWorktree(teamName, workerName, repoRoot, options = {}) {
 function removeWorkerWorktree(teamName, workerName, repoRoot) {
   const wtPath = getWorktreePath(repoRoot, teamName, workerName);
   const branch = getBranchName(teamName, workerName);
+  if (existsSync10(wtPath)) {
+    restoreWorktreeRootAgents(teamName, workerName, repoRoot, wtPath);
+  }
   if (existsSync10(wtPath) && isWorktreeDirty(wtPath)) {
     const error = new Error(`worktree_dirty: preserving dirty worker worktree at ${wtPath}`);
     error.code = "worktree_dirty";
@@ -6470,7 +6563,7 @@ async function startTeamV2(config) {
     const wName = workerNames[i];
     const agentType = agentTypes[i % agentTypes.length] ?? agentTypes[0] ?? "claude";
     await ensureWorkerStateDir(sanitized, wName, leaderCwd);
-    await writeWorkerOverlay({
+    const overlayPath = await writeWorkerOverlay({
       teamName: sanitized,
       workerName: wName,
       agentType,
@@ -6482,6 +6575,10 @@ async function startTeamV2(config) {
       cwd: leaderCwd,
       ...config.rolePrompt ? { bootstrapInstructions: config.rolePrompt } : {}
     });
+    const worktree = workerWorktrees.get(wName);
+    if (worktree) {
+      installWorktreeRootAgents(sanitized, wName, leaderCwd, worktree.path, await readFile9(overlayPath, "utf-8"));
+    }
   }
   const session = await createTeamSession(sanitized, 0, leaderCwd, {
     newWindow: Boolean(config.newWindow)
@@ -6682,7 +6779,7 @@ async function requeueDeadWorkerTasks(teamName, deadWorkerNames, cwd) {
     await writeFile6(sidecarPath, JSON.stringify(sidecar, null, 2), "utf-8");
     const taskPath2 = absPath(cwd, TeamPaths.taskFile(sanitized, task.id));
     try {
-      const { readFileSync: readFileSync11, writeFileSync: writeFileSync3 } = await import("fs");
+      const { readFileSync: readFileSync11, writeFileSync: writeFileSync4 } = await import("fs");
       const { withFileLockSync: withFileLockSync2 } = await Promise.resolve().then(() => (init_file_lock(), file_lock_exports));
       withFileLockSync2(taskPath2 + ".lock", () => {
         const raw = readFileSync11(taskPath2, "utf-8");
@@ -6691,7 +6788,7 @@ async function requeueDeadWorkerTasks(teamName, deadWorkerNames, cwd) {
           taskData.status = "pending";
           taskData.owner = void 0;
           taskData.claim = void 0;
-          writeFileSync3(taskPath2, JSON.stringify(taskData, null, 2), "utf-8");
+          writeFileSync4(taskPath2, JSON.stringify(taskData, null, 2), "utf-8");
           requeued.push(task.id);
         }
       });
@@ -6715,7 +6812,7 @@ async function processCliWorkerVerdicts(teamName, cwd) {
     "team.runtime-v2.processCliWorkerVerdicts appendTeamEvent failed"
   );
   const { rename: rename3 } = await import("fs/promises");
-  const { readFileSync: readFileSync11, writeFileSync: writeFileSync3, existsSync: fsExistsSync } = await import("fs");
+  const { readFileSync: readFileSync11, writeFileSync: writeFileSync4, existsSync: fsExistsSync } = await import("fs");
   const { withFileLockSync: withFileLockSync2 } = await Promise.resolve().then(() => (init_file_lock(), file_lock_exports));
   for (const worker of config.workers) {
     const outputFile = worker.output_file;
@@ -6797,7 +6894,7 @@ async function processCliWorkerVerdicts(teamName, cwd) {
         if (terminalStatus === "failed") {
           taskData.error = `cli_worker_verdict:${payload.verdict}:${payload.summary}`;
         }
-        writeFileSync3(targetTaskPath, JSON.stringify(taskData, null, 2), "utf-8");
+        writeFileSync4(targetTaskPath, JSON.stringify(taskData, null, 2), "utf-8");
         transitionOk = true;
       });
     } catch {
@@ -7244,7 +7341,7 @@ var init_runtime_v2 = __esm({
 // src/cli/team.ts
 import { randomUUID as randomUUID6 } from "crypto";
 import { spawn } from "child_process";
-import { existsSync as existsSync17, mkdirSync as mkdirSync3, readFileSync as readFileSync10, writeFileSync as writeFileSync2 } from "fs";
+import { existsSync as existsSync17, mkdirSync as mkdirSync3, readFileSync as readFileSync10, writeFileSync as writeFileSync3 } from "fs";
 import { readFile as readFile10, rm as rm4 } from "fs/promises";
 import { dirname as dirname13, join as join20 } from "path";
 import { fileURLToPath as fileURLToPath3 } from "url";
@@ -7276,7 +7373,7 @@ init_tmux_session();
 init_fs_utils();
 init_platform();
 init_state_paths();
-import { readFileSync as readFileSync8, readdirSync as readdirSync3, existsSync as existsSync11, openSync as openSync4, closeSync as closeSync4, unlinkSync as unlinkSync4, writeSync as writeSync4, statSync as statSync3, constants as fsConstants2 } from "fs";
+import { readFileSync as readFileSync8, readdirSync as readdirSync3, existsSync as existsSync11, openSync as openSync4, closeSync as closeSync4, unlinkSync as unlinkSync5, writeSync as writeSync4, statSync as statSync3, constants as fsConstants2 } from "fs";
 import { join as join16 } from "path";
 
 // src/team/runtime.ts
@@ -8308,7 +8405,7 @@ function readJobFromDisk(jobId, jobsDir) {
 }
 function writeJobToDisk(jobId, job, jobsDir) {
   ensureJobsDir(jobsDir);
-  writeFileSync2(jobPath(jobsDir, jobId), JSON.stringify(job), "utf-8");
+  writeFileSync3(jobPath(jobsDir, jobId), JSON.stringify(job), "utf-8");
 }
 function parseJobResult(raw) {
   if (!raw) return void 0;
