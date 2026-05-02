@@ -489,6 +489,15 @@ export interface ShutdownAck {
 }
 
 /** Monitor snapshot state for delta detection */
+export interface TeamWorkerIntegrationState {
+  last_seen_head?: string;
+  last_integrated_head?: string;
+  last_rebased_leader_head?: string;
+  status?: 'integrated' | 'rebase_applied' | 'rebase_conflict' | 'rebase_skipped' | 'integration_failed';
+  reason?: string;
+  updated_at?: string;
+}
+
 export interface TeamMonitorSnapshotState {
   taskStatusById: Record<string, string>;
   workerAliveByName: Record<string, boolean>;
@@ -498,6 +507,7 @@ export interface TeamMonitorSnapshotState {
   workerTaskIdByName: Record<string, string>;
   mailboxNotifiedByMessageId: Record<string, string>;
   completedEventTaskIds: Record<string, boolean>;
+  integrationByWorker?: Record<string, TeamWorkerIntegrationState>;
   monitorTimings?: {
     list_tasks_ms: number;
     worker_scan_ms: number;

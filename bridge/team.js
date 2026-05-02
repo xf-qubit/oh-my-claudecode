@@ -1353,8 +1353,14 @@ var init_dispatch_queue = __esm({
 import { readFile as readFile4 } from "fs/promises";
 import { existsSync as existsSync5 } from "fs";
 import { join as join6 } from "path";
+async function readWorkerStatus(teamName, workerName, cwd) {
+  return teamReadWorkerStatus(teamName, workerName, cwd);
+}
 async function writeWorkerInbox(teamName, workerName, prompt, cwd) {
   return teamWriteWorkerInbox(teamName, workerName, prompt, cwd);
+}
+async function appendTeamEvent(teamName, event, cwd) {
+  return teamAppendEvent(teamName, event, cwd);
 }
 async function sendDirectMessage(teamName, fromWorker, toWorker, body, cwd) {
   return teamSendMessage(teamName, fromWorker, toWorker, body, cwd);
@@ -1367,6 +1373,12 @@ async function markMessageNotified(teamName, workerName, messageId, cwd) {
 }
 async function listMailboxMessages(teamName, workerName, cwd) {
   return teamListMailbox(teamName, workerName, cwd);
+}
+async function readMonitorSnapshot(teamName, cwd) {
+  return teamReadMonitorSnapshot(teamName, cwd);
+}
+async function writeMonitorSnapshot(teamName, snapshot, cwd) {
+  return teamWriteMonitorSnapshot(teamName, snapshot, cwd);
 }
 var init_state = __esm({
   "src/team/state.ts"() {
@@ -2693,7 +2705,7 @@ function filterTeamEvents(events, options = {}) {
     return true;
   });
 }
-async function appendTeamEvent(teamName, event, cwd) {
+async function appendTeamEvent2(teamName, event, cwd) {
   const full = {
     event_id: randomUUID4(),
     team: teamName,
@@ -2746,7 +2758,7 @@ async function emitMonitorDerivedEvents(teamName, tasks, workers, previousSnapsh
     const prevStatus = previousSnapshot.taskStatusById?.[task.id];
     if (!prevStatus || prevStatus === task.status) continue;
     if (task.status === "completed" && !completedEventTaskIds[task.id]) {
-      await appendTeamEvent(teamName, {
+      await appendTeamEvent2(teamName, {
         type: "task_completed",
         worker: "leader-fixed",
         task_id: task.id,
@@ -2754,7 +2766,7 @@ async function emitMonitorDerivedEvents(teamName, tasks, workers, previousSnapsh
       }, cwd).catch(logDerivedEventFailure);
       completedEventTaskIds[task.id] = true;
     } else if (task.status === "failed") {
-      await appendTeamEvent(teamName, {
+      await appendTeamEvent2(teamName, {
         type: "task_failed",
         worker: "leader-fixed",
         task_id: task.id,
@@ -2767,14 +2779,14 @@ async function emitMonitorDerivedEvents(teamName, tasks, workers, previousSnapsh
     const prevState = previousSnapshot.workerStateByName?.[worker.name];
     const currentLiveness = worker.liveness ?? (worker.alive ? "alive" : "dead");
     if (prevAlive === true && currentLiveness === "dead") {
-      await appendTeamEvent(teamName, {
+      await appendTeamEvent2(teamName, {
         type: "worker_stopped",
         worker: worker.name,
         reason: "pane_exited"
       }, cwd).catch(logDerivedEventFailure);
     }
     if (prevState === "working" && worker.status.state === "idle") {
-      await appendTeamEvent(teamName, {
+      await appendTeamEvent2(teamName, {
         type: "worker_idle",
         worker: worker.name,
         reason: `state_transition:${prevState}->${worker.status.state}`
@@ -6287,14 +6299,14 @@ async function readTeamManifest(teamName, cwd) {
   const manifest = await readJsonSafe3(absPath(cwd, TeamPaths.manifest(teamName)));
   return manifest ? normalizeTeamManifest(manifest) : null;
 }
-async function readWorkerStatus(teamName, workerName, cwd) {
+async function readWorkerStatus2(teamName, workerName, cwd) {
   const data = await readJsonSafe3(absPath(cwd, TeamPaths.workerStatus(teamName, workerName)));
   return data ?? { state: "unknown", updated_at: "" };
 }
 async function readWorkerHeartbeat(teamName, workerName, cwd) {
   return readJsonSafe3(absPath(cwd, TeamPaths.heartbeat(teamName, workerName)));
 }
-async function readMonitorSnapshot(teamName, cwd) {
+async function readMonitorSnapshot2(teamName, cwd) {
   const p = absPath(cwd, TeamPaths.monitorSnapshot(teamName));
   if (!existsSync15(p)) return null;
   try {
@@ -6324,7 +6336,7 @@ async function readMonitorSnapshot(teamName, cwd) {
     return null;
   }
 }
-async function writeMonitorSnapshot(teamName, snapshot, cwd) {
+async function writeMonitorSnapshot2(teamName, snapshot, cwd) {
   await writeAtomic2(absPath(cwd, TeamPaths.monitorSnapshot(teamName)), JSON.stringify(snapshot, null, 2));
 }
 async function writeShutdownRequest(teamName, workerName, fromWorker, cwd) {
@@ -6884,7 +6896,7 @@ var init_runtime_flags = __esm({
 });
 
 // src/team/merge-coordinator.ts
-import { execFileSync as execFileSync4 } from "node:child_process";
+import { execFileSync as execFileSync5 } from "node:child_process";
 function validateBranchName(branch) {
   if (!BRANCH_NAME_RE.test(branch)) {
     throw new Error(`Invalid branch name: "${branch}" \u2014 must match ${BRANCH_NAME_RE}`);
@@ -6894,7 +6906,7 @@ function checkMergeConflicts(workerBranch, baseBranch, repoRoot) {
   validateBranchName(workerBranch);
   validateBranchName(baseBranch);
   try {
-    execFileSync4(
+    execFileSync5(
       "git",
       ["merge-tree", "--write-tree", baseBranch, workerBranch],
       { cwd: repoRoot, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }
@@ -6914,17 +6926,17 @@ function checkMergeConflicts(workerBranch, baseBranch, repoRoot) {
       return conflicts.length > 0 ? conflicts : ["(merge-tree reported conflicts)"];
     }
   }
-  const mergeBase = execFileSync4(
+  const mergeBase = execFileSync5(
     "git",
     ["merge-base", baseBranch, workerBranch],
     { cwd: repoRoot, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }
   ).trim();
-  const baseDiff = execFileSync4(
+  const baseDiff = execFileSync5(
     "git",
     ["diff", "--name-only", mergeBase, baseBranch],
     { cwd: repoRoot, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }
   ).trim();
-  const workerDiff = execFileSync4(
+  const workerDiff = execFileSync5(
     "git",
     ["diff", "--name-only", mergeBase, workerBranch],
     { cwd: repoRoot, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }
@@ -6942,22 +6954,22 @@ function mergeWorkerBranch(workerBranch, baseBranch, repoRoot) {
   const workerName = workerBranch.split("/").pop() || workerBranch;
   try {
     try {
-      execFileSync4("git", ["diff-index", "--quiet", "HEAD", "--"], {
+      execFileSync5("git", ["diff-index", "--quiet", "HEAD", "--"], {
         cwd: repoRoot,
         stdio: "pipe"
       });
     } catch {
       throw new Error("Working tree has uncommitted changes \u2014 commit or stash before merging");
     }
-    execFileSync4("git", ["checkout", baseBranch], {
+    execFileSync5("git", ["checkout", baseBranch], {
       cwd: repoRoot,
       stdio: "pipe"
     });
-    execFileSync4("git", ["merge", "--no-ff", "-m", `Merge ${workerBranch} into ${baseBranch}`, workerBranch], {
+    execFileSync5("git", ["merge", "--no-ff", "-m", `Merge ${workerBranch} into ${baseBranch}`, workerBranch], {
       cwd: repoRoot,
       stdio: "pipe"
     });
-    const mergeCommit = execFileSync4("git", ["rev-parse", "HEAD"], {
+    const mergeCommit = execFileSync5("git", ["rev-parse", "HEAD"], {
       cwd: repoRoot,
       encoding: "utf-8",
       stdio: "pipe"
@@ -6971,7 +6983,7 @@ function mergeWorkerBranch(workerBranch, baseBranch, repoRoot) {
     };
   } catch (_err) {
     try {
-      execFileSync4("git", ["merge", "--abort"], { cwd: repoRoot, stdio: "pipe" });
+      execFileSync5("git", ["merge", "--abort"], { cwd: repoRoot, stdio: "pipe" });
     } catch {
     }
     const conflicts = checkMergeConflicts(workerBranch, baseBranch, repoRoot);
@@ -7250,7 +7262,7 @@ var init_worker_commit_cadence = __esm({
 });
 
 // src/team/merge-orchestrator.ts
-import { execFileSync as execFileSync5 } from "node:child_process";
+import { execFileSync as execFileSync6 } from "node:child_process";
 import { existsSync as existsSync18 } from "node:fs";
 import { mkdir as mkdir9, appendFile as appendFile5 } from "node:fs/promises";
 import { dirname as dirname14, join as join21 } from "node:path";
@@ -7318,7 +7330,7 @@ function createMutex() {
   };
 }
 function gitRevParseHead(repoRoot, branch) {
-  return execFileSync5("git", ["rev-parse", `refs/heads/${branch}`], {
+  return execFileSync6("git", ["rev-parse", `refs/heads/${branch}`], {
     cwd: repoRoot,
     encoding: "utf-8",
     stdio: "pipe"
@@ -7326,7 +7338,7 @@ function gitRevParseHead(repoRoot, branch) {
 }
 function gitPath(worktreePath, gitPathName) {
   try {
-    const resolved = execFileSync5("git", ["rev-parse", "--git-path", gitPathName], {
+    const resolved = execFileSync6("git", ["rev-parse", "--git-path", gitPathName], {
       cwd: worktreePath,
       encoding: "utf-8",
       stdio: "pipe"
@@ -7341,7 +7353,7 @@ function isRebaseInProgress(worktreePath) {
 }
 function isWorktreeRegistered(repoRoot, wtPath) {
   try {
-    const out = execFileSync5("git", ["worktree", "list", "--porcelain"], {
+    const out = execFileSync6("git", ["worktree", "list", "--porcelain"], {
       cwd: repoRoot,
       encoding: "utf-8",
       stdio: "pipe"
@@ -7360,20 +7372,20 @@ function ensureMergerWorktree(repoRoot, mergerPath, leaderBranch) {
   if (existsSync18(mergerPath) && isWorktreeRegistered(repoRoot, mergerPath)) {
     return;
   }
-  execFileSync5("git", ["worktree", "add", "--force", mergerPath, leaderBranch], {
+  execFileSync6("git", ["worktree", "add", "--force", mergerPath, leaderBranch], {
     cwd: repoRoot,
     stdio: "pipe"
   });
 }
 function preflightMergerWorktree(mergerPath, leaderBranch) {
   try {
-    execFileSync5("git", ["fetch", "--no-tags", "origin", leaderBranch], {
+    execFileSync6("git", ["fetch", "--no-tags", "origin", leaderBranch], {
       cwd: mergerPath,
       stdio: "pipe"
     });
   } catch {
   }
-  execFileSync5("git", ["reset", "--hard", leaderBranch], {
+  execFileSync6("git", ["reset", "--hard", leaderBranch], {
     cwd: mergerPath,
     stdio: "pipe"
   });
@@ -7441,14 +7453,14 @@ async function startMergeOrchestrator(config) {
       await pauseHookViaSentinel(wtPath);
       pausedWorkers.add(other.workerName);
       try {
-        execFileSync5("git", ["fetch", "--no-tags", "origin", config.leaderBranch], {
+        execFileSync6("git", ["fetch", "--no-tags", "origin", config.leaderBranch], {
           cwd: wtPath,
           stdio: "pipe"
         });
       } catch {
       }
       try {
-        execFileSync5("git", ["rebase", config.leaderBranch], {
+        execFileSync6("git", ["rebase", config.leaderBranch], {
           cwd: wtPath,
           stdio: "pipe"
         });
@@ -7461,7 +7473,7 @@ async function startMergeOrchestrator(config) {
       } catch {
         let conflictingFiles = [];
         try {
-          const status = execFileSync5("git", ["status", "--porcelain"], {
+          const status = execFileSync6("git", ["status", "--porcelain"], {
             cwd: wtPath,
             encoding: "utf-8",
             stdio: "pipe"
@@ -7472,7 +7484,7 @@ async function startMergeOrchestrator(config) {
         }
         const baseSha = (() => {
           try {
-            return execFileSync5("git", ["rev-parse", `refs/heads/${config.leaderBranch}`], {
+            return execFileSync6("git", ["rev-parse", `refs/heads/${config.leaderBranch}`], {
               cwd: config.repoRoot,
               encoding: "utf-8",
               stdio: "pipe"
@@ -7530,7 +7542,7 @@ async function startMergeOrchestrator(config) {
       if (conflicts.length > 0) {
         let mergeBaseSha = "unknown";
         try {
-          mergeBaseSha = execFileSync5(
+          mergeBaseSha = execFileSync6(
             "git",
             ["merge-base", config.leaderBranch, entry.workerBranch],
             { cwd: mergerPath, encoding: "utf-8", stdio: "pipe" }
@@ -7651,7 +7663,7 @@ async function startMergeOrchestrator(config) {
   async function handleRebaseResolution(entry) {
     pausedWorkers.delete(entry.workerName);
     try {
-      const status = execFileSync5("git", ["status", "--porcelain"], {
+      const status = execFileSync6("git", ["status", "--porcelain"], {
         cwd: entry.workerWorktreePath,
         encoding: "utf-8",
         stdio: "pipe"
@@ -7876,7 +7888,7 @@ import { join as join22, resolve as resolve4 } from "path";
 import { existsSync as existsSync19 } from "fs";
 import { mkdir as mkdir10, readdir as readdir2, readFile as readFile11, rm as rm4, writeFile as writeFile7 } from "fs/promises";
 import { performance } from "perf_hooks";
-import { execFileSync as execFileSync6 } from "node:child_process";
+import { execFileSync as execFileSync7 } from "node:child_process";
 function registerTeamOrchestrator(teamName, handle) {
   orchestratorByTeam.set(teamName, handle);
 }
@@ -7910,7 +7922,7 @@ async function stopTeamCadence(teamName) {
   }
 }
 function resolveLeaderBranch(cwd) {
-  const out = execFileSync6("git", ["branch", "--show-current"], {
+  const out = execFileSync7("git", ["branch", "--show-current"], {
     cwd,
     encoding: "utf-8",
     stdio: ["pipe", "pipe", "pipe"]
@@ -8072,7 +8084,7 @@ async function hasWorkerTaskClaimEvidence(teamName, workerName, cwd, taskId) {
 async function hasWorkerStartupEvidence(teamName, workerName, taskId, cwd) {
   const [hasClaimEvidence, status] = await Promise.all([
     hasWorkerTaskClaimEvidence(teamName, workerName, cwd, taskId),
-    readWorkerStatus(teamName, workerName, cwd)
+    readWorkerStatus2(teamName, workerName, cwd)
   ]);
   return hasClaimEvidence || hasWorkerStatusProgress(status, taskId);
 }
@@ -8379,7 +8391,7 @@ async function startTeamV2(config) {
       `[team/runtime-v2] cli_binary_missing:${agentType}: ${reason} \u2014 falling back to claude snapshot (AC-8)
 `
     );
-    await appendTeamEvent(sanitized, {
+    await appendTeamEvent2(sanitized, {
       type: "team_leader_nudge",
       worker: "leader-fixed",
       reason: `cli_binary_missing:${agentType}:${reason}`
@@ -8642,7 +8654,7 @@ async function startTeamV2(config) {
         const logEventFailure2 = createSwallowedErrorLogger(
           "team.runtime-v2.startTeamV2 appendTeamEvent failed"
         );
-        appendTeamEvent(sanitized, {
+        appendTeamEvent2(sanitized, {
           type: "team_leader_nudge",
           worker: "leader-fixed",
           reason: `startup_manual_intervention_required:${wName}:${workerLaunch.startupFailureReason}`
@@ -8679,7 +8691,7 @@ async function startTeamV2(config) {
   const logEventFailure = createSwallowedErrorLogger(
     "team.runtime-v2.startTeamV2 appendTeamEvent failed"
   );
-  appendTeamEvent(sanitized, {
+  appendTeamEvent2(sanitized, {
     type: "team_leader_nudge",
     worker: "leader-fixed",
     reason: `start_team_v2: workers=${config.workerCount} tasks=${config.tasks.length} panes=${workerPaneIds.length}`
@@ -8788,7 +8800,7 @@ async function requeueDeadWorkerTasks(teamName, deadWorkerNames, cwd) {
       });
     } catch {
     }
-    await appendTeamEvent(sanitized, {
+    await appendTeamEvent2(sanitized, {
       type: "team_leader_nudge",
       worker: "leader-fixed",
       task_id: task.id,
@@ -8823,7 +8835,7 @@ async function processCliWorkerVerdicts(teamName, cwd) {
       payload = parseCliWorkerVerdict(raw);
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
-      await appendTeamEvent(sanitized, {
+      await appendTeamEvent2(sanitized, {
         type: "team_leader_nudge",
         worker: "leader-fixed",
         reason: `cli_worker_verdict_parse_failed:${worker.name}:${reason}`
@@ -8851,7 +8863,7 @@ async function processCliWorkerVerdicts(teamName, cwd) {
       }
     }
     if (!targetTaskId || !targetTaskPath) {
-      await appendTeamEvent(sanitized, {
+      await appendTeamEvent2(sanitized, {
         type: "team_leader_nudge",
         worker: "leader-fixed",
         reason: `cli_worker_verdict_no_in_progress_task:${worker.name}:verdict=${payload.verdict}`
@@ -8902,7 +8914,7 @@ async function processCliWorkerVerdicts(teamName, cwd) {
       });
       continue;
     }
-    await appendTeamEvent(sanitized, {
+    await appendTeamEvent2(sanitized, {
       type: terminalStatus === "completed" ? "task_completed" : "task_failed",
       worker: worker.name,
       task_id: targetTaskId,
@@ -8934,7 +8946,7 @@ async function monitorTeamV2(teamName, cwd) {
 `
     );
   }
-  const previousSnapshot = await readMonitorSnapshot(sanitized, cwd);
+  const previousSnapshot = await readMonitorSnapshot2(sanitized, cwd);
   const listTasksStartMs = performance.now();
   const allTasks = await listTasksFromFiles(sanitized, cwd);
   const listTasksMs = performance.now() - listTasksStartMs;
@@ -8956,7 +8968,7 @@ async function monitorTeamV2(teamName, cwd) {
       const liveness = await getWorkerPaneLiveness(worker.pane_id);
       const alive = liveness === "alive";
       const [status, heartbeat, paneCapture] = await Promise.all([
-        readWorkerStatus(sanitized, worker.name, cwd),
+        readWorkerStatus2(sanitized, worker.name, cwd),
         readWorkerHeartbeat(sanitized, worker.name, cwd),
         alive ? captureWorkerPane(worker.pane_id) : Promise.resolve("")
       ]);
@@ -9056,7 +9068,7 @@ async function monitorTeamV2(teamName, cwd) {
   );
   const updatedAt = (/* @__PURE__ */ new Date()).toISOString();
   const totalMs = performance.now() - monitorStartMs;
-  await writeMonitorSnapshot(sanitized, {
+  await writeMonitorSnapshot2(sanitized, {
     taskStatusById: Object.fromEntries(allTasks.map((t) => [t.id, t.status])),
     workerAliveByName: Object.fromEntries(workers.map((w) => [w.name, w.alive])),
     workerLivenessByName: Object.fromEntries(workers.map((w) => [w.name, w.liveness])),
@@ -9108,7 +9120,7 @@ async function shutdownTeamV2(teamName, cwd, options = {}) {
       try {
         const drainResult = await orchestrator.drainAndStop();
         if (drainResult.unmerged.length > 0) {
-          await appendTeamEvent(sanitized, {
+          await appendTeamEvent2(sanitized, {
             type: "team_leader_nudge",
             worker: "leader-fixed",
             reason: `auto_merge_drain_unmerged:${drainResult.unmerged.map((u) => `${u.workerName}:${u.reason}`).join(",")}`
@@ -9157,7 +9169,7 @@ async function shutdownTeamV2(teamName, cwd, options = {}) {
       allowed: false
     };
     gate.allowed = gate.pending === 0 && gate.blocked === 0 && gate.in_progress === 0 && gate.failed === 0;
-    await appendTeamEvent(sanitized, {
+    await appendTeamEvent2(sanitized, {
       type: "shutdown_gate",
       worker: "leader-fixed",
       reason: `allowed=${gate.allowed} total=${gate.total} pending=${gate.pending} blocked=${gate.blocked} in_progress=${gate.in_progress} completed=${gate.completed} failed=${gate.failed}${ralph ? " policy=ralph" : ""}`
@@ -9165,13 +9177,13 @@ async function shutdownTeamV2(teamName, cwd, options = {}) {
     if (!gate.allowed) {
       const hasActiveWork = gate.pending > 0 || gate.blocked > 0 || gate.in_progress > 0;
       if (!governance.cleanup_requires_all_workers_inactive) {
-        await appendTeamEvent(sanitized, {
+        await appendTeamEvent2(sanitized, {
           type: "team_leader_nudge",
           worker: "leader-fixed",
           reason: `cleanup_override_bypassed:pending=${gate.pending},blocked=${gate.blocked},in_progress=${gate.in_progress},failed=${gate.failed}`
         }, cwd).catch(logEventFailure);
       } else if (ralph && !hasActiveWork) {
-        await appendTeamEvent(sanitized, {
+        await appendTeamEvent2(sanitized, {
           type: "team_leader_nudge",
           worker: "leader-fixed",
           reason: `gate_bypassed:pending=${gate.pending},blocked=${gate.blocked},in_progress=${gate.in_progress},failed=${gate.failed}`
@@ -9184,7 +9196,7 @@ async function shutdownTeamV2(teamName, cwd, options = {}) {
     }
   }
   if (force) {
-    await appendTeamEvent(sanitized, {
+    await appendTeamEvent2(sanitized, {
       type: "shutdown_gate_forced",
       worker: "leader-fixed",
       reason: "force_bypass"
@@ -9221,7 +9233,7 @@ Then exit your session.
       const ack = await readShutdownAck(sanitized, w.name, cwd, shutdownRequestTimes.get(w.name));
       if (ack) {
         ackedWorkers.add(w.name);
-        await appendTeamEvent(sanitized, {
+        await appendTeamEvent2(sanitized, {
           type: "shutdown_ack",
           worker: w.name,
           reason: ack.status === "reject" ? `reject:${ack.reason || "no_reason"}` : "accept"
@@ -9293,7 +9305,7 @@ Then exit your session.
     const completed = finalTasks.filter((t) => t.status === "completed").length;
     const failed = finalTasks.filter((t) => t.status === "failed").length;
     const pending = finalTasks.filter((t) => t.status === "pending").length;
-    await appendTeamEvent(sanitized, {
+    await appendTeamEvent2(sanitized, {
       type: "team_leader_nudge",
       worker: "leader-fixed",
       reason: `ralph_cleanup_summary: total=${finalTasks.length} completed=${completed} failed=${failed} pending=${pending} force=${force}`
@@ -9437,7 +9449,9 @@ init_team_name();
 init_tmux_session();
 init_worker_bootstrap();
 init_git_worktree();
+init_state();
 import { mkdir as mkdir5, writeFile as writeFile4, readFile as readFile8, rm as rm3, rename as rename2 } from "fs/promises";
+import { execFileSync as execFileSync4 } from "child_process";
 import { join as join18 } from "path";
 import { existsSync as existsSync14 } from "fs";
 
@@ -9491,7 +9505,149 @@ function taskPath(root, taskId) {
 async function readTask(root, taskId) {
   return readJsonSafe2(taskPath(root, taskId));
 }
-async function monitorTeam(teamName, cwd, workerPaneIds) {
+function gitMaybe(cwd, args) {
+  try {
+    return execFileSync4("git", args, { cwd, encoding: "utf-8", stdio: "pipe" }).trim();
+  } catch {
+    return null;
+  }
+}
+function gitMust(cwd, args) {
+  return execFileSync4("git", args, { cwd, encoding: "utf-8", stdio: "pipe" }).trim();
+}
+function isAncestor(repo, ancestor, descendant) {
+  try {
+    execFileSync4("git", ["merge-base", "--is-ancestor", ancestor, descendant], { cwd: repo, stdio: "pipe" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+async function writeIntegrationReport(teamName, cwd, body) {
+  await writeFile4(join18(stateRoot(cwd, teamName), "integration-report.md"), body, "utf-8");
+}
+async function integrateWorkerCommitsIntoLeader(teamName, cwd) {
+  const previous = await readMonitorSnapshot(teamName, cwd).catch(() => null);
+  const integrationByWorker = {
+    ...previous?.integrationByWorker ?? {}
+  };
+  const config = await readJsonSafe2(join18(stateRoot(cwd, teamName), "config.json"));
+  const workers = config?.workers ?? [];
+  let leaderHead = gitMaybe(cwd, ["rev-parse", "HEAD"]);
+  if (!leaderHead) return integrationByWorker;
+  for (const worker of workers) {
+    if (!worker.worktree_path || !worker.worktree_branch) continue;
+    const workerHead = gitMaybe(cwd, ["rev-parse", worker.worktree_branch]);
+    if (!workerHead || isAncestor(cwd, workerHead, leaderHead)) {
+      continue;
+    }
+    const beforeLeader = leaderHead;
+    try {
+      gitMust(cwd, ["merge", "--no-ff", "--no-edit", worker.worktree_branch]);
+      leaderHead = gitMust(cwd, ["rev-parse", "HEAD"]);
+      integrationByWorker[worker.name] = {
+        ...integrationByWorker[worker.name] ?? {},
+        last_seen_head: workerHead,
+        last_integrated_head: leaderHead,
+        status: "integrated",
+        updated_at: (/* @__PURE__ */ new Date()).toISOString()
+      };
+      await appendTeamEvent(teamName, {
+        type: "worker_merge_applied",
+        worker: worker.name,
+        reason: `merged ${worker.name} into leader`
+      }, cwd);
+    } catch (error) {
+      gitMaybe(cwd, ["merge", "--abort"]);
+      integrationByWorker[worker.name] = {
+        ...integrationByWorker[worker.name] ?? {},
+        last_seen_head: workerHead,
+        status: "integration_failed",
+        reason: error instanceof Error ? error.message : String(error),
+        updated_at: (/* @__PURE__ */ new Date()).toISOString()
+      };
+      await appendTeamEvent(teamName, {
+        type: "worker_merge_conflict",
+        worker: worker.name,
+        reason: `merge failed for ${worker.name}`
+      }, cwd);
+      continue;
+    }
+    for (const other of workers) {
+      if (other.name === worker.name || !other.worktree_path || !other.worktree_branch) continue;
+      const otherHead = gitMaybe(cwd, ["rev-parse", other.worktree_branch]);
+      if (!otherHead || isAncestor(cwd, leaderHead, otherHead)) continue;
+      const status = await readWorkerStatus(teamName, other.name, cwd).catch(() => ({ state: "unknown", updated_at: (/* @__PURE__ */ new Date()).toISOString() }));
+      if (status.state !== "idle") {
+        integrationByWorker[other.name] = {
+          ...integrationByWorker[other.name] ?? {},
+          last_seen_head: otherHead,
+          status: "rebase_skipped",
+          reason: `worker state ${status.state} is not eligible for cross-rebase`,
+          updated_at: (/* @__PURE__ */ new Date()).toISOString()
+        };
+        await appendTeamEvent(teamName, {
+          type: "worker_cross_rebase_skipped",
+          worker: other.name,
+          reason: `worker state ${status.state} is not eligible for cross-rebase`
+        }, cwd);
+        continue;
+      }
+      try {
+        gitMust(other.worktree_path, ["rebase", "-X", "ours", leaderHead]);
+        integrationByWorker[other.name] = {
+          ...integrationByWorker[other.name] ?? {},
+          last_seen_head: otherHead,
+          last_rebased_leader_head: leaderHead,
+          status: "rebase_applied",
+          updated_at: (/* @__PURE__ */ new Date()).toISOString()
+        };
+        await appendTeamEvent(teamName, {
+          type: "worker_cross_rebase_applied",
+          worker: other.name,
+          reason: `cross-rebased ${other.name} onto ${leaderHead.slice(0, 12)} (-X ours)`
+        }, cwd);
+      } catch (error) {
+        const statusOutput = gitMaybe(other.worktree_path, ["status", "--porcelain"]) ?? "";
+        const conflictFiles = statusOutput.split("\n").map((line) => line.trim().slice(3).trim()).filter(Boolean);
+        gitMaybe(other.worktree_path, ["rebase", "--abort"]);
+        integrationByWorker[other.name] = {
+          ...integrationByWorker[other.name] ?? {},
+          last_seen_head: otherHead,
+          status: "rebase_conflict",
+          reason: error instanceof Error ? error.message : String(error),
+          updated_at: (/* @__PURE__ */ new Date()).toISOString()
+        };
+        await appendTeamEvent(teamName, {
+          type: "worker_cross_rebase_conflict",
+          worker: other.name,
+          reason: `rebase -X ours onto ${leaderHead.slice(0, 12)} failed; aborted. Will retry next cycle.`
+        }, cwd);
+        await sendDirectMessage(
+          teamName,
+          other.name,
+          "leader-fixed",
+          `CONFLICT AUTO-RESOLVED FAILED: ${other.name}'s rebase onto ${leaderHead.slice(0, 12)} with -X ours failed on files: ${conflictFiles.join(", ") || "unknown"}. Consider steering ${other.name} to review these areas.`,
+          cwd
+        ).catch(() => void 0);
+        await writeIntegrationReport(
+          teamName,
+          cwd,
+          `# Team integration report
+
+Worker ${other.name} rebase onto ${leaderHead} failed and was aborted.
+
+Files:
+${conflictFiles.map((file) => `- ${file}`).join("\n")}
+`
+        );
+      }
+    }
+    if (beforeLeader !== leaderHead) break;
+  }
+  return integrationByWorker;
+}
+async function monitorTeam(teamName, cwd, workerPaneIds = []) {
   validateTeamName(teamName);
   const monitorStartedAt = Date.now();
   const root = stateRoot(cwd, teamName);
@@ -9536,6 +9692,7 @@ async function monitorTeam(teamName, cwd, workerPaneIds) {
     if (!alive) deadWorkers.push(wName);
   }
   const workerScanMs = Date.now() - workerScanStartedAt;
+  const integrationByWorker = await integrateWorkerCommitsIntoLeader(teamName, cwd);
   let phase = "executing";
   if (taskCounts.inProgress === 0 && taskCounts.pending > 0 && taskCounts.completed === 0) {
     phase = "planning";
@@ -9544,12 +9701,26 @@ async function monitorTeam(teamName, cwd, workerPaneIds) {
   } else if (taskCounts.completed > 0 && taskCounts.pending === 0 && taskCounts.inProgress === 0 && taskCounts.failed === 0) {
     phase = "completed";
   }
+  const previousSnapshot = await readMonitorSnapshot(teamName, cwd).catch(() => null);
+  await writeMonitorSnapshot(teamName, {
+    taskStatusById: previousSnapshot?.taskStatusById ?? {},
+    workerAliveByName: Object.fromEntries(workers.map((worker) => [worker.workerName, worker.alive])),
+    workerLivenessByName: previousSnapshot?.workerLivenessByName,
+    workerStateByName: previousSnapshot?.workerStateByName ?? {},
+    workerTurnCountByName: previousSnapshot?.workerTurnCountByName ?? {},
+    workerTaskIdByName: previousSnapshot?.workerTaskIdByName ?? {},
+    mailboxNotifiedByMessageId: previousSnapshot?.mailboxNotifiedByMessageId ?? {},
+    completedEventTaskIds: previousSnapshot?.completedEventTaskIds ?? {},
+    integrationByWorker,
+    monitorTimings: previousSnapshot?.monitorTimings
+  }, cwd).catch(() => void 0);
   return {
     teamName,
     phase,
     workers,
     taskCounts,
     deadWorkers,
+    integrationByWorker,
     monitorPerformance: {
       listTasksMs,
       workerScanMs,
