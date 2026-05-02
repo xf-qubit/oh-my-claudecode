@@ -235,6 +235,8 @@ export {
   recordLeaderRuntimeActivity,
 } from './leader-activity.js';
 
+export { readLatestTeamProgressEvidenceMs } from './progress-evidence.js';
+
 export {
   checkSentinelReadiness,
   waitForSentinelReadiness,

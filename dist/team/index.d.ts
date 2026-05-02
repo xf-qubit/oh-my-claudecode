@@ -53,6 +53,7 @@ export { synthesizeDelegationPlan } from './delegation-policy.js';
 export { assertCurrentTaskBranchAvailable, findActiveCurrentTaskByBranch, listActiveCurrentTasks, readCurrentTaskBaseline, upsertCurrentTaskBaseline, } from './current-task-baseline.js';
 export type { CurrentTaskBaselineEntry, CurrentTaskStatus, UpsertCurrentTaskBaselineInput } from './current-task-baseline.js';
 export { isLeaderRuntimeStale, leaderRuntimeActivityPath, readBranchGitActivityMsForPath, readLatestLeaderActivityMsFromStateDir, readLeaderRuntimeSignalStatuses, recordLeaderRuntimeActivity, } from './leader-activity.js';
+export { readLatestTeamProgressEvidenceMs } from './progress-evidence.js';
 export { checkSentinelReadiness, waitForSentinelReadiness, } from './sentinel-gate.js';
 export type { SentinelReadinessOptions, SentinelGateResult, SentinelWaitOptions, SentinelWaitResult, } from './sentinel-gate.js';
 export type { CliAgentType, CliAgentContract, WorkerLaunchConfig } from './model-contract.js';
