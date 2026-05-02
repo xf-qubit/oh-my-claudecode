@@ -31,6 +31,7 @@ export { appendTeamDeliveryLog, appendTeamDeliveryLogForCwd, teamDeliveryLogPath
 export { buildRebalanceDecisions } from './rebalance-policy.js';
 export { synthesizeDelegationPlan } from './delegation-policy.js';
 export { assertCurrentTaskBranchAvailable, findActiveCurrentTaskByBranch, listActiveCurrentTasks, readCurrentTaskBaseline, upsertCurrentTaskBaseline, } from './current-task-baseline.js';
+export { isLeaderRuntimeStale, leaderRuntimeActivityPath, readBranchGitActivityMsForPath, readLatestLeaderActivityMsFromStateDir, readLeaderRuntimeSignalStatuses, recordLeaderRuntimeActivity, } from './leader-activity.js';
 export { checkSentinelReadiness, waitForSentinelReadiness, } from './sentinel-gate.js';
 export { getContract, isCliAvailable as isCliAvailableForAgent, validateCliAvailable as validateCliAvailableForAgent, buildLaunchArgs, buildWorkerCommand, parseCliOutput, 
 // Deprecated backward-compat exports kept for downstream consumers.

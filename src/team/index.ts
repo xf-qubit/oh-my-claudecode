@@ -227,6 +227,15 @@ export {
 export type { CurrentTaskBaselineEntry, CurrentTaskStatus, UpsertCurrentTaskBaselineInput } from './current-task-baseline.js';
 
 export {
+  isLeaderRuntimeStale,
+  leaderRuntimeActivityPath,
+  readBranchGitActivityMsForPath,
+  readLatestLeaderActivityMsFromStateDir,
+  readLeaderRuntimeSignalStatuses,
+  recordLeaderRuntimeActivity,
+} from './leader-activity.js';
+
+export {
   checkSentinelReadiness,
   waitForSentinelReadiness,
 } from './sentinel-gate.js';
