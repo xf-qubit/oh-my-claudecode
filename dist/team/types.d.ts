@@ -6,7 +6,7 @@
 import type { TeamEventType, TeamTaskStatus } from './contracts.js';
 import type { TeamPhase } from './phase-controller.js';
 import type { TeamReminderIntent } from './reminder-intents.js';
-import type { CanonicalTeamRole, RoleAssignment } from '../shared/types.js';
+import type { CanonicalTeamRole, RoleAssignment, TeamWorkerOverrideSpec } from '../shared/types.js';
 /** Bridge daemon configuration — passed via --config file to bridge-entry.ts */
 export interface BridgeConfig {
     teamName: string;
@@ -218,14 +218,18 @@ export interface TeamManifestV2 {
     created_at: string;
     leader_cwd?: string;
     team_state_root?: string;
+    team_root?: string;
     workspace_mode?: 'single' | 'worktree';
     worktree_mode?: 'disabled' | 'detached' | 'named';
+    /** Explicit opt-in for legacy monitor-driven auto-merge/cross-rebase integration. */
+    auto_merge?: boolean;
     lifecycle_profile?: 'default' | 'linked_ralph';
     leader_pane_id: string | null;
     hud_pane_id: string | null;
     resize_hook_name: string | null;
     resize_hook_target: string | null;
     next_worker_index?: number;
+    worker_overrides?: Record<string, TeamWorkerOverrideSpec>;
 }
 /** Worker info within a team config */
 export interface WorkerInfo {
@@ -234,6 +238,8 @@ export interface WorkerInfo {
     role: string;
     worker_cli?: 'codex' | 'claude' | 'gemini' | 'cursor';
     assigned_tasks: string[];
+    team_root?: string;
+    task_scope?: string[];
     pid?: number;
     pane_id?: string;
     working_dir?: string;
@@ -267,8 +273,11 @@ export interface TeamConfig {
     next_task_id: number;
     leader_cwd?: string;
     team_state_root?: string;
+    team_root?: string;
     workspace_mode?: 'single' | 'worktree';
     worktree_mode?: 'disabled' | 'detached' | 'named';
+    /** Explicit opt-in for legacy monitor-driven auto-merge/cross-rebase integration. */
+    auto_merge?: boolean;
     lifecycle_profile?: 'default' | 'linked_ralph';
     leader_pane_id: string | null;
     hud_pane_id: string | null;
@@ -284,6 +293,8 @@ export interface TeamConfig {
         primary: RoleAssignment;
         fallback: RoleAssignment;
     }>;
+    /** Immutable per-worker launch overrides captured at team creation. */
+    worker_overrides?: Record<string, TeamWorkerOverrideSpec>;
 }
 /** Dispatch request kinds */
 export type TeamDispatchRequestKind = 'inbox' | 'mailbox' | 'nudge';
@@ -383,7 +394,7 @@ export type ClaimTaskResult = {
     claimToken: string;
 } | {
     ok: false;
-    error: 'claim_conflict' | 'blocked_dependency' | 'task_not_found' | 'already_terminal' | 'worker_not_found';
+    error: 'claim_conflict' | 'blocked_dependency' | 'task_not_found' | 'already_terminal' | 'worker_not_found' | 'task_scope_violation';
     dependencies?: string[];
 };
 /** Result of transitioning a task status */
@@ -392,7 +403,7 @@ export type TransitionTaskResult = {
     task: TeamTaskV2;
 } | {
     ok: false;
-    error: 'claim_conflict' | 'invalid_transition' | 'task_not_found' | 'already_terminal' | 'lease_expired' | 'missing_delegation_compliance_evidence';
+    error: 'claim_conflict' | 'invalid_transition' | 'task_not_found' | 'already_terminal' | 'lease_expired' | 'missing_delegation_compliance_evidence' | 'worker_not_found' | 'task_scope_violation';
 };
 /** Result of releasing a task claim */
 export type ReleaseTaskClaimResult = {
@@ -400,13 +411,14 @@ export type ReleaseTaskClaimResult = {
     task: TeamTaskV2;
 } | {
     ok: false;
-    error: 'claim_conflict' | 'task_not_found' | 'already_terminal' | 'lease_expired';
+    error: 'claim_conflict' | 'task_not_found' | 'already_terminal' | 'lease_expired' | 'worker_not_found' | 'task_scope_violation';
 };
 /** Team summary for monitoring */
 export interface TeamSummary {
     teamName: string;
     workerCount: number;
     team_state_root?: string;
+    team_root?: string;
     workspace_mode?: 'single' | 'worktree';
     worktree_mode?: 'disabled' | 'detached' | 'named';
     tasks: {

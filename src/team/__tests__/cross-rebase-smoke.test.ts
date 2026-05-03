@@ -38,6 +38,7 @@ async function configureWorkers(
   teamName: string,
   repo: string,
   workers: Array<{ path: string; branch: string }>,
+  opts: { autoMerge?: boolean } = {},
 ): Promise<void> {
   const cfg: TeamConfig = {
     name: teamName,
@@ -65,6 +66,7 @@ async function configureWorkers(
       worktree_detached: false,
       worktree_created: false,
     })),
+    ...(opts.autoMerge === true ? { auto_merge: true } : {}),
   };
   await initTeamState(cfg, repo);
   const saved = await readTeamConfig(teamName, repo);
@@ -73,6 +75,48 @@ async function configureWorkers(
 }
 
 describe('cross-rebase smoke regression', () => {
+
+  it('leaves worker branches untouched when auto-merge is not explicitly enabled', async () => {
+    const repo = await initRepo();
+    let worker1Path = '';
+    let worker2Path = '';
+    try {
+      worker1Path = await addWorktree(repo, 'wk1-auto-off', 'omc-auto-off-w1-');
+      worker2Path = await addWorktree(repo, 'wk2-auto-off', 'omc-auto-off-w2-');
+
+      await writeFile(join(worker1Path, 'w1.txt'), 'from worker 1\n', 'utf-8');
+      execFileSync('git', ['add', 'w1.txt'], { cwd: worker1Path, stdio: 'ignore' });
+      execFileSync('git', ['commit', '-m', 'worker-1 change'], { cwd: worker1Path, stdio: 'ignore' });
+
+      const leaderHeadBefore = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf-8' }).trim();
+      const worker2HeadBefore = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: worker2Path, encoding: 'utf-8' }).trim();
+
+      await configureWorkers('auto-merge-default-off', repo, [
+        { path: worker1Path, branch: 'wk1-auto-off' },
+        { path: worker2Path, branch: 'wk2-auto-off' },
+      ]);
+      await writeWorkerStatus('auto-merge-default-off', 'worker-2', { state: 'idle', updated_at: new Date().toISOString() }, repo);
+
+      await monitorTeam('auto-merge-default-off', repo);
+
+      const leaderHeadAfter = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf-8' }).trim();
+      const worker2HeadAfter = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: worker2Path, encoding: 'utf-8' }).trim();
+      const events = await readTeamEvents('auto-merge-default-off', repo, { wakeableOnly: false });
+
+      assert.equal(leaderHeadAfter, leaderHeadBefore);
+      assert.equal(worker2HeadAfter, worker2HeadBefore);
+      assert.equal(existsSync(join(worker2Path, 'w1.txt')), false);
+      assert.equal(events.some((event) => {
+        const eventType = event.type as string;
+        return eventType === 'worker_merge_applied' || eventType.startsWith('worker_cross_rebase_');
+      }), false);
+    } finally {
+      if (worker1Path) await rm(worker1Path, { recursive: true, force: true });
+      if (worker2Path) await rm(worker2Path, { recursive: true, force: true });
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
   it('surfaces cross-rebase applied as an audit event without making it wakeable', async () => {
     const repo = await initRepo();
     let worker1Path = '';
@@ -92,7 +136,7 @@ describe('cross-rebase smoke regression', () => {
       await configureWorkers('cross-rebase-applied', repo, [
         { path: worker1Path, branch: 'wk1-cross-applied' },
         { path: worker2Path, branch: 'wk2-cross-applied' },
-      ]);
+      ], { autoMerge: true });
       await writeWorkerStatus('cross-rebase-applied', 'worker-2', { state: 'idle', updated_at: new Date().toISOString() }, repo);
 
       await monitorTeam('cross-rebase-applied', repo);
@@ -136,7 +180,7 @@ describe('cross-rebase smoke regression', () => {
       await configureWorkers('cross-rebase-conflict', repo, [
         { path: worker1Path, branch: 'wk1-cross-conflict' },
         { path: worker2Path, branch: 'wk2-cross-conflict' },
-      ]);
+      ], { autoMerge: true });
       await writeWorkerStatus('cross-rebase-conflict', 'worker-2', { state: 'idle', updated_at: new Date().toISOString() }, repo);
 
       await monitorTeam('cross-rebase-conflict', repo);
@@ -183,7 +227,7 @@ describe('cross-rebase smoke regression', () => {
       await configureWorkers('cross-rebase-skipped', repo, [
         { path: worker1Path, branch: 'wk1-cross-skipped' },
         { path: worker2Path, branch: 'wk2-cross-skipped' },
-      ]);
+      ], { autoMerge: true });
       await writeWorkerStatus('cross-rebase-skipped', 'worker-2', { state: 'working', updated_at: new Date().toISOString() }, repo);
 
       await monitorTeam('cross-rebase-skipped', repo);

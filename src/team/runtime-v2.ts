@@ -55,7 +55,7 @@ import type {
 } from './types.js';
 import type { TeamPhase } from './phase-controller.js';
 import { validateTeamName } from './team-name.js';
-import type { CliAgentType } from './model-contract.js';
+import type { CliAgentType, TeamReasoningEffort } from './model-contract.js';
 import {
   buildWorkerArgv, getContract, resolveValidatedBinaryPath,
   getWorkerEnv as getModelWorkerEnv, isPromptModeAgent, getPromptModeArgs,
@@ -83,7 +83,7 @@ import {
 } from './git-worktree.js';
 import { formatOmcCliInvocation } from '../utils/omc-cli-rendering.js';
 import { createSwallowedErrorLogger } from '../lib/swallowed-error.js';
-import type { CanonicalTeamRole, PluginConfig, RoleAssignment, TeamRoleAssignmentSpec } from '../shared/types.js';
+import type { CanonicalTeamRole, PluginConfig, RoleAssignment, TeamRoleAssignmentSpec, TeamWorkerOverrideSpec } from '../shared/types.js';
 import { CANONICAL_TEAM_ROLES } from '../shared/types.js';
 import { loadConfig } from '../config/loader.js';
 import { buildResolvedRoutingSnapshot, getRoleRoutingSpec } from './stage-router.js';
@@ -313,6 +313,77 @@ function resolveTaskAssignment(
     agentType: chosen.provider as CliAgentType,
     model: chosen.model,
     role: canonical,
+  };
+}
+
+
+function isCliAgentType(value: string | undefined): value is CliAgentType {
+  return value === 'claude' || value === 'codex' || value === 'gemini' || value === 'cursor';
+}
+
+function normalizeCanonicalWorkerRole(role: string | undefined): CanonicalTeamRole | null {
+  if (!role) return null;
+  const knownAgentRoleAliases: Record<string, CanonicalTeamRole> = {
+    codeReviewer: 'code-reviewer',
+    securityReviewer: 'security-reviewer',
+    testEngineer: 'test-engineer',
+    codeSimplifier: 'code-simplifier',
+    documentSpecialist: 'document-specialist',
+  };
+  const normalized = knownAgentRoleAliases[role] ?? normalizeDelegationRole(role);
+  return (CANONICAL_TEAM_ROLES as readonly string[]).includes(normalized)
+    ? (normalized as CanonicalTeamRole)
+    : null;
+}
+
+function getWorkerOverride(
+  overrides: Record<string, TeamWorkerOverrideSpec> | undefined,
+  workerName: string,
+  workerIndex: number,
+): TeamWorkerOverrideSpec | undefined {
+  if (!overrides) return undefined;
+  return overrides[workerName] ?? overrides[String(workerIndex + 1)];
+}
+
+function applyWorkerOverride(
+  base: { agentType: CliAgentType; model: string; role: CanonicalTeamRole | null },
+  override: TeamWorkerOverrideSpec | undefined,
+  resolvedRouting: Record<CanonicalTeamRole, { primary: RoleAssignment; fallback: RoleAssignment }>,
+  resolvedBinaryPaths: Partial<Record<CliAgentType, string>>,
+): { agentType: CliAgentType; model: string; role: CanonicalTeamRole | null; extraFlags: string[]; reasoning?: TeamReasoningEffort } {
+  if (!override) return { ...base, extraFlags: [] };
+
+  const overrideRole = normalizeCanonicalWorkerRole(override.role ?? override.agent);
+  const routedPair = overrideRole ? resolvedRouting[overrideRole] : undefined;
+  let next = { ...base, ...(overrideRole ? { role: overrideRole } : {}) };
+
+  if (override.provider) {
+    if (!isCliAgentType(override.provider)) {
+      throw new Error(`Unsupported team.workerOverrides provider: ${override.provider}`);
+    }
+    next = { ...next, agentType: override.provider };
+  } else if (routedPair) {
+    const primaryProvider = routedPair.primary.provider;
+    const chosen = isCliAgentType(primaryProvider) && resolvedBinaryPaths[primaryProvider]
+      ? routedPair.primary
+      : routedPair.fallback;
+    if (isCliAgentType(chosen.provider)) {
+      next = { ...next, agentType: chosen.provider, model: chosen.model };
+    }
+  }
+
+  if (override.model && override.model.trim().length > 0) {
+    next = { ...next, model: override.model.trim() };
+  }
+
+  const extraFlags = Array.isArray(override.extraFlags)
+    ? override.extraFlags.filter((flag): flag is string => typeof flag === 'string' && flag.trim().length > 0)
+    : [];
+  const reasoning = override.reasoning;
+  return {
+    ...next,
+    extraFlags,
+    ...(reasoning ? { reasoning } : {}),
   };
 }
 
@@ -553,6 +624,8 @@ interface SpawnV2WorkerOptions {
   cwd: string;
   workerCwd?: string;
   worktreePath?: string;
+  teamRoot?: string;
+  taskScope?: readonly string[];
   autoMerge?: boolean;
   resolvedBinaryPaths: Partial<Record<CliAgentType, string>>;
   /**
@@ -568,6 +641,8 @@ interface SpawnV2WorkerOptions {
    * is populated for the completion handler.
    */
   role?: CanonicalTeamRole;
+  launchExtraFlags?: string[];
+  reasoning?: TeamReasoningEffort;
 }
 
 interface SpawnV2WorkerResult {
@@ -683,12 +758,27 @@ async function spawnV2Worker(opts: SpawnV2WorkerOptions): Promise<SpawnV2WorkerR
   }
 
   // Build env and launch command
+  const serializedTaskScope = (opts.taskScope ?? [])
+    .map((taskId) => taskId.trim())
+    .filter((taskId, index, all) => taskId.length > 0 && all.indexOf(taskId) === index)
+    .join(',');
   const envVars = {
-    ...getModelWorkerEnv(opts.teamName, opts.workerName, opts.agentType),
+    ...getModelWorkerEnv(opts.teamName, opts.workerName, opts.agentType, process.env, {
+      leaderCwd: opts.cwd,
+      workerCwd: opts.workerCwd ?? opts.cwd,
+      teamStateRoot: teamStateRoot(opts.cwd, opts.teamName),
+      teamRoot: opts.teamRoot ?? opts.cwd,
+      taskScope: opts.taskScope,
+    }),
     OMC_TEAM_STATE_ROOT: teamStateRoot(opts.cwd, opts.teamName),
+    OMX_TEAM_STATE_ROOT: teamStateRoot(opts.cwd, opts.teamName),
     OMC_TEAM_LEADER_CWD: opts.cwd,
-    ...(opts.worktreePath ? { OMC_TEAM_WORKTREE_PATH: opts.worktreePath } : {}),
-    ...(opts.workerCwd ? { OMC_TEAM_WORKER_CWD: opts.workerCwd } : {}),
+    OMX_TEAM_LEADER_CWD: opts.cwd,
+    OMC_TEAM_ROOT: opts.teamRoot ?? opts.cwd,
+    OMX_TEAM_ROOT: opts.teamRoot ?? opts.cwd,
+    ...(serializedTaskScope ? { OMC_TEAM_TASK_SCOPE: serializedTaskScope, OMX_TEAM_TASK_SCOPE: serializedTaskScope } : {}),
+    ...(opts.worktreePath ? { OMC_TEAM_WORKTREE_PATH: opts.worktreePath, OMX_TEAM_WORKTREE_PATH: opts.worktreePath } : {}),
+    ...(opts.workerCwd ? { OMC_TEAM_WORKER_CWD: opts.workerCwd, OMX_TEAM_WORKER_CWD: opts.workerCwd } : {}),
   };
   const resolvedBinaryPath = opts.resolvedBinaryPaths[opts.agentType]
     ?? resolveValidatedBinaryPath(opts.agentType);
@@ -715,9 +805,9 @@ async function spawnV2Worker(opts: SpawnV2WorkerOptions): Promise<SpawnV2WorkerR
 
   const workerExtraFlags = resolveWorkerLaunchExtraFlags(
     process.env,
-    [],
+    opts.launchExtraFlags ?? [],
     modelForAgent,
-    opts.agentType === 'codex' ? resolveAgentReasoningEffort(opts.role ?? undefined) : undefined,
+    opts.agentType === 'codex' ? (opts.reasoning ?? resolveAgentReasoningEffort(opts.role ?? undefined)) : undefined,
   );
 
   const [launchBinary, ...launchArgs] = buildWorkerArgv(opts.agentType, {
@@ -1080,6 +1170,14 @@ export async function startTeamV2(config: StartTeamV2Config): Promise<TeamRuntim
       startupAllocations.push({ workerName: r.workerName, taskIndex: Number(r.taskId) });
     }
   }
+  const startupTaskScopes = new Map<string, string[]>();
+  for (const name of workerNames) startupTaskScopes.set(name, []);
+  for (const allocation of startupAllocations) {
+    const scope = startupTaskScopes.get(allocation.workerName);
+    if (!scope) continue;
+    const taskId = String(allocation.taskIndex + 1);
+    if (!scope.includes(taskId)) scope.push(taskId);
+  }
 
   // Set up worker state dirs and overlays (with v2 CLI API instructions)
   try {
@@ -1131,6 +1229,7 @@ export async function startTeamV2(config: StartTeamV2Config): Promise<TeamRuntim
       role: config.workerRoles?.[i]
         ?? (agentTypes[i % agentTypes.length] ?? agentTypes[0] ?? 'claude') as string,
       assigned_tasks: [] as string[],
+      task_scope: startupTaskScopes.get(wName) ?? [],
       working_dir: worktree?.path ?? leaderCwd,
       team_state_root: teamStateRoot(leaderCwd, sanitized),
       ...(worktree ? {
@@ -1165,8 +1264,10 @@ export async function startTeamV2(config: StartTeamV2Config): Promise<TeamRuntim
     resize_hook_name: null,
     resize_hook_target: null,
     resolved_routing: resolvedRouting,
+    ...(pluginCfg.team?.workerOverrides ? { worker_overrides: pluginCfg.team.workerOverrides } : {}),
     workspace_mode: workspaceMode,
     worktree_mode: worktreeMode,
+    auto_merge: Boolean(config.autoMerge),
   };
   try {
     await saveTeamConfig(teamConfig, leaderCwd);
@@ -1213,6 +1314,7 @@ export async function startTeamV2(config: StartTeamV2Config): Promise<TeamRuntim
     resize_hook_name: null,
     resize_hook_target: null,
     next_worker_index: teamConfig.next_worker_index,
+    ...(teamConfig.worker_overrides ? { worker_overrides: teamConfig.worker_overrides } : {}),
   };
   try {
     await writeFile(absPath(leaderCwd, TeamPaths.manifest(sanitized)), JSON.stringify(teamManifest, null, 2), 'utf-8');
@@ -1251,12 +1353,19 @@ export async function startTeamV2(config: StartTeamV2Config): Promise<TeamRuntim
     // Falls back to the round-robin agentType when the inferred role is
     // outside the canonical vocabulary (preserves pre-patch behavior).
     const fallbackAgent = (agentTypes[workerIndex % agentTypes.length] ?? agentTypes[0] ?? 'claude') as CliAgentType;
-    const assignment = resolveTaskAssignment(
+    const baseAssignment = resolveTaskAssignment(
       task,
       resolvedRouting,
       pluginCfg.team?.roleRouting as Partial<Record<CanonicalTeamRole, TeamRoleAssignmentSpec>> | undefined,
       resolvedBinaryPaths,
       fallbackAgent,
+    );
+    const workerOverride = getWorkerOverride(teamConfig.worker_overrides, wName, workerIndex);
+    const assignment = applyWorkerOverride(
+      baseAssignment,
+      workerOverride,
+      resolvedRouting,
+      resolvedBinaryPaths,
     );
 
     const workerLaunch = await spawnV2Worker({
@@ -1272,10 +1381,14 @@ export async function startTeamV2(config: StartTeamV2Config): Promise<TeamRuntim
       cwd: leaderCwd,
       workerCwd: workersInfo[workerIndex]?.working_dir ?? leaderCwd,
       worktreePath: workersInfo[workerIndex]?.worktree_path,
+      teamRoot: leaderCwd,
+      taskScope: workersInfo[workerIndex]?.task_scope ?? [],
       autoMerge: Boolean(config.autoMerge),
       resolvedBinaryPaths,
       ...(assignment.model ? { model: assignment.model } : {}),
       ...(assignment.role ? { role: assignment.role } : {}),
+      ...(assignment.extraFlags.length > 0 ? { launchExtraFlags: assignment.extraFlags } : {}),
+      ...(assignment.reasoning ? { reasoning: assignment.reasoning } : {}),
     });
 
     if (workerLaunch.paneId) {
@@ -1285,6 +1398,7 @@ export async function startTeamV2(config: StartTeamV2Config): Promise<TeamRuntim
         workerInfo.pane_id = workerLaunch.paneId;
         workerInfo.assigned_tasks = workerLaunch.startupAssigned ? [taskId] : [];
         workerInfo.worker_cli = assignment.agentType;
+        if (workerOverride && assignment.role) workerInfo.role = assignment.role;
         if (workerLaunch.outputFile) {
           workerInfo.output_file = workerLaunch.outputFile;
         }

@@ -630,18 +630,60 @@ const WORKER_MODEL_ENV_ALLOWLIST = [
   'OMC_GEMINI_DEFAULT_MODEL',
 ] as const;
 
+export interface WorkerEnvIsolationOptions {
+  leaderCwd?: string;
+  workerCwd?: string;
+  teamStateRoot?: string;
+  teamRoot?: string;
+  taskScope?: readonly string[];
+}
+
+function setIfText(target: Record<string, string>, key: string, value: string | undefined): void {
+  if (typeof value === 'string' && value.trim() !== '') {
+    target[key] = value;
+  }
+}
+
+function serializeTaskScope(taskScope: readonly string[] | undefined): string | undefined {
+  if (!taskScope) return undefined;
+  const normalized = taskScope
+    .map((taskId) => taskId.trim())
+    .filter((taskId, index, all) => taskId.length > 0 && all.indexOf(taskId) === index);
+  return normalized.length > 0 ? normalized.join(',') : undefined;
+}
+
 export function getWorkerEnv(
   teamName: string,
   workerName: string,
   agentType: CliAgentType,
   env: NodeJS.ProcessEnv = process.env,
+  options: WorkerEnvIsolationOptions = {},
 ): Record<string, string> {
   validateTeamName(teamName);
+  const workerIdentity = `${teamName}/${workerName}`;
   const workerEnv: Record<string, string> = {
-    OMC_TEAM_WORKER: `${teamName}/${workerName}`,
+    OMC_TEAM_WORKER: workerIdentity,
+    OMX_TEAM_WORKER: workerIdentity,
     OMC_TEAM_NAME: teamName,
+    OMX_TEAM_NAME: teamName,
     OMC_WORKER_AGENT_TYPE: agentType,
+    OMX_WORKER_AGENT_TYPE: agentType,
+    OMC_TEAM_WORKER_CLI: agentType,
+    OMX_TEAM_WORKER_CLI: agentType,
   };
+
+  setIfText(workerEnv, 'OMC_TEAM_LEADER_CWD', options.leaderCwd);
+  setIfText(workerEnv, 'OMX_TEAM_LEADER_CWD', options.leaderCwd);
+  setIfText(workerEnv, 'OMC_TEAM_WORKER_CWD', options.workerCwd);
+  setIfText(workerEnv, 'OMX_TEAM_WORKER_CWD', options.workerCwd);
+  setIfText(workerEnv, 'OMC_TEAM_STATE_ROOT', options.teamStateRoot);
+  setIfText(workerEnv, 'OMX_TEAM_STATE_ROOT', options.teamStateRoot);
+  setIfText(workerEnv, 'OMC_TEAM_ROOT', options.teamRoot);
+  setIfText(workerEnv, 'OMX_TEAM_ROOT', options.teamRoot);
+
+  const taskScope = serializeTaskScope(options.taskScope);
+  setIfText(workerEnv, 'OMC_TEAM_TASK_SCOPE', taskScope);
+  setIfText(workerEnv, 'OMX_TEAM_TASK_SCOPE', taskScope);
 
   for (const key of WORKER_MODEL_ENV_ALLOWLIST) {
     const value = env[key];

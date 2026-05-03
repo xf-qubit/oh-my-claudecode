@@ -489,8 +489,16 @@ async function integrateWorkerCommitsIntoLeader(
   const integrationByWorker: Record<string, TeamWorkerIntegrationState> = {
     ...((previous as { integrationByWorker?: Record<string, TeamWorkerIntegrationState> } | null)?.integrationByWorker ?? {}),
   };
-  const config = await readJsonSafe<{ workers?: Array<{ name: string; worktree_repo_root?: string; worktree_path?: string; worktree_branch?: string }> }>(join(stateRoot(cwd, teamName), 'config.json'));
-  const workers = config?.workers ?? [];
+  const config = await readJsonSafe<{
+    autoMerge?: boolean;
+    auto_merge?: boolean;
+    workers?: Array<{ name: string; worktree_repo_root?: string; worktree_path?: string; worktree_branch?: string }>;
+  }>(join(stateRoot(cwd, teamName), 'config.json'));
+  if (config?.autoMerge !== true && config?.auto_merge !== true) {
+    return integrationByWorker;
+  }
+
+  const workers = config.workers ?? [];
   let leaderHead = gitMaybe(cwd, ['rev-parse', 'HEAD']);
   if (!leaderHead) return integrationByWorker;
 

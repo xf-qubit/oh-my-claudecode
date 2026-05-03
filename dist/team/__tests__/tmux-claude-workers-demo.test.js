@@ -188,4 +188,18 @@ describe('tmux claude workers demo', () => {
         });
     });
 });
+describe('worker process launch env isolation', () => {
+    it('does not let extraEnv override canonical worker identity', () => {
+        const spec = buildWorkerProcessLaunchSpec('team-a', 3, [], '/tmp/repo', {
+            OMC_TEAM_WORKER: 'stale/worker-9',
+            OMX_TEAM_WORKER: 'stale/worker-9',
+            OMC_TEAM_NAME: 'stale-team',
+            OMX_TEAM_NAME: 'stale-team',
+        }, 'codex');
+        assert.equal(spec.env.OMC_TEAM_WORKER, 'team-a/worker-3');
+        assert.equal(spec.env.OMX_TEAM_WORKER, 'team-a/worker-3');
+        assert.equal(spec.env.OMC_TEAM_NAME, 'team-a');
+        assert.equal(spec.env.OMX_TEAM_NAME, 'team-a');
+    });
+});
 //# sourceMappingURL=tmux-claude-workers-demo.test.js.map

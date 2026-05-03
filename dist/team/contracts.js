@@ -35,6 +35,7 @@ export const TEAM_EVENT_TYPES = [
     'worker_diff_activity',
     'worker_diff_report',
     'worker_merge_report',
+    'worker_merge_applied',
     'worker_merge_conflict',
     'worker_integration_failed',
     'worker_integration_attempt_requested',

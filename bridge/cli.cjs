@@ -3848,7 +3848,8 @@ function buildDefaultConfig() {
     // Empty defaults: zero behavior change until user opts in.
     team: {
       ops: {},
-      roleRouting: {}
+      roleRouting: {},
+      workerOverrides: {}
     },
     planOutput: {
       directory: ".omc/plans",
@@ -4092,8 +4093,10 @@ function validateTeamConfig(config2) {
     }
   }
   const roleRouting = team.roleRouting;
-  if (!roleRouting || typeof roleRouting !== "object") return;
-  for (const [rawRoleKey, rawSpec] of Object.entries(roleRouting)) {
+  if (roleRouting !== void 0 && typeof roleRouting !== "object") {
+    throw new Error(`[OMC] team.roleRouting: must be an object, got ${Array.isArray(roleRouting) ? "array" : typeof roleRouting}`);
+  }
+  for (const [rawRoleKey, rawSpec] of Object.entries(roleRouting ?? {})) {
     const normalized = normalizeDelegationRole(rawRoleKey);
     if (!CANONICAL_TEAM_ROLE_SET.has(normalized)) {
       throw new Error(
@@ -4137,6 +4140,64 @@ function validateTeamConfig(config2) {
       if (typeof spec.agent !== "string" || !KNOWN_AGENT_NAME_SET.has(spec.agent)) {
         throw new Error(
           `[OMC] team.roleRouting.${rawRoleKey}.agent: unknown agent "${String(spec.agent)}". Allowed: ${[...KNOWN_AGENT_NAME_SET].join(", ")}`
+        );
+      }
+    }
+  }
+  const workerOverrides = team.workerOverrides;
+  if (workerOverrides !== void 0 && (!workerOverrides || typeof workerOverrides !== "object" || Array.isArray(workerOverrides))) {
+    throw new Error(
+      `[OMC] team.workerOverrides: must be an object, got ${Array.isArray(workerOverrides) ? "array" : typeof workerOverrides}`
+    );
+  }
+  for (const [workerKey, rawSpec] of Object.entries(workerOverrides ?? {})) {
+    if (!/^worker-\d+$/.test(workerKey) && !/^\d+$/.test(workerKey)) {
+      throw new Error(
+        `[OMC] team.workerOverrides: invalid key "${workerKey}". Use worker names like worker-1 or 1-based indexes like 1`
+      );
+    }
+    if (!rawSpec || typeof rawSpec !== "object" || Array.isArray(rawSpec)) {
+      throw new Error(
+        `[OMC] team.workerOverrides.${workerKey}: must be an object, got ${Array.isArray(rawSpec) ? "array" : typeof rawSpec}`
+      );
+    }
+    const spec = rawSpec;
+    if (spec.provider !== void 0 && (typeof spec.provider !== "string" || !TEAM_ROLE_PROVIDERS.has(spec.provider))) {
+      throw new Error(
+        `[OMC] team.workerOverrides.${workerKey}.provider: invalid value "${String(spec.provider)}". Allowed: ${[...TEAM_ROLE_PROVIDERS].join(", ")}`
+      );
+    }
+    if (spec.model !== void 0 && !isValidModelValue(spec.model)) {
+      throw new Error(`[OMC] team.workerOverrides.${workerKey}.model: must be a non-empty model ID string`);
+    }
+    if (typeof spec.model === "string" && TEAM_ROLE_TIERS.has(spec.model)) {
+      throw new Error(`[OMC] team.workerOverrides.${workerKey}.model: tier names are not supported here; use an explicit model ID string`);
+    }
+    if (spec.agent !== void 0) {
+      const normalizedAgentRole = typeof spec.agent === "string" ? normalizeDelegationRole(spec.agent) : "";
+      if (typeof spec.agent !== "string" || !KNOWN_AGENT_NAME_SET.has(spec.agent) && !CANONICAL_TEAM_ROLE_SET.has(normalizedAgentRole)) {
+        throw new Error(
+          `[OMC] team.workerOverrides.${workerKey}.agent: unknown agent or role "${String(spec.agent)}". Allowed agents: ${[...KNOWN_AGENT_NAME_SET].join(", ")}. Allowed roles: ${[...CANONICAL_TEAM_ROLE_SET].join(", ")}`
+        );
+      }
+    }
+    if (spec.role !== void 0) {
+      if (typeof spec.role !== "string" || !CANONICAL_TEAM_ROLE_SET.has(normalizeDelegationRole(spec.role))) {
+        throw new Error(
+          `[OMC] team.workerOverrides.${workerKey}.role: unknown role "${String(spec.role)}". Allowed roles: ${[...CANONICAL_TEAM_ROLE_SET].join(", ")}`
+        );
+      }
+    }
+    if (spec.extraFlags !== void 0) {
+      if (!Array.isArray(spec.extraFlags) || !spec.extraFlags.every((flag) => typeof flag === "string")) {
+        throw new Error(`[OMC] team.workerOverrides.${workerKey}.extraFlags: must be an array of strings`);
+      }
+    }
+    if (spec.reasoning !== void 0) {
+      const allowed = /* @__PURE__ */ new Set(["low", "medium", "high", "xhigh"]);
+      if (typeof spec.reasoning !== "string" || !allowed.has(spec.reasoning)) {
+        throw new Error(
+          `[OMC] team.workerOverrides.${workerKey}.reasoning: invalid value "${String(spec.reasoning)}". Allowed: ${[...allowed].join(", ")}`
         );
       }
     }
@@ -13768,7 +13829,11 @@ function workerPriority(worker) {
   if (typeof worker.index === "number" && worker.index > 0) return 1;
   return 0;
 }
-function mergeAssignedTasks(primary, secondary) {
+function mergeUniqueStrings(primary, secondary) {
+  return mergeUniqueStringsOptional(primary, secondary) ?? [];
+}
+function mergeUniqueStringsOptional(primary, secondary) {
+  if (!Array.isArray(primary) && !Array.isArray(secondary)) return void 0;
   const merged = [];
   for (const taskId of [...primary ?? [], ...secondary ?? []]) {
     if (typeof taskId !== "string" || taskId.trim() === "" || merged.includes(taskId)) continue;
@@ -13815,7 +13880,7 @@ function canonicalizeWorkers(workers) {
     byName.set(name, {
       ...winner,
       name,
-      assigned_tasks: mergeAssignedTasks(winner.assigned_tasks, loser.assigned_tasks),
+      assigned_tasks: mergeUniqueStrings(winner.assigned_tasks, loser.assigned_tasks),
       pane_id: backfillText(winner.pane_id, loser.pane_id),
       pid: backfillNumber(winner.pid, loser.pid),
       index: backfillNumber(winner.index, loser.index, (value) => value > 0) ?? 0,
@@ -13827,7 +13892,9 @@ function canonicalizeWorkers(workers) {
       worktree_branch: backfillText(winner.worktree_branch, loser.worktree_branch),
       worktree_detached: backfillBoolean(winner.worktree_detached, loser.worktree_detached),
       worktree_created: backfillBoolean(winner.worktree_created, loser.worktree_created),
-      team_state_root: backfillText(winner.team_state_root, loser.team_state_root)
+      team_state_root: backfillText(winner.team_state_root, loser.team_state_root),
+      team_root: backfillText(winner.team_root, loser.team_root),
+      task_scope: mergeUniqueStringsOptional(winner.task_scope, loser.task_scope)
     });
   }
   return {
@@ -27296,6 +27363,7 @@ var init_contracts = __esm({
       "worker_diff_activity",
       "worker_diff_report",
       "worker_merge_report",
+      "worker_merge_applied",
       "worker_merge_conflict",
       "worker_integration_failed",
       "worker_integration_attempt_requested",
@@ -27326,9 +27394,22 @@ async function computeTaskReadiness(teamName, taskId, cwd2, deps) {
   if (incomplete.length > 0) return { ready: false, reason: "blocked_dependency", dependencies: incomplete };
   return { ready: true };
 }
+function findWorkerScope(cfg, workerName2) {
+  return cfg.workers.find((w) => w.name === workerName2) ?? null;
+}
+function isTaskInWorkerScope(worker, taskId) {
+  if (Array.isArray(worker.task_scope)) {
+    return worker.task_scope.includes(taskId);
+  }
+  const assigned = worker.assigned_tasks ?? [];
+  return assigned.length === 0 || assigned.includes(taskId);
+}
 async function claimTask(taskId, workerName2, expectedVersion, deps) {
   const cfg = await deps.readTeamConfig(deps.teamName, deps.cwd);
-  if (!cfg || !cfg.workers.some((w) => w.name === workerName2)) return { ok: false, error: "worker_not_found" };
+  if (!cfg) return { ok: false, error: "worker_not_found" };
+  const worker = findWorkerScope(cfg, workerName2);
+  if (!worker) return { ok: false, error: "worker_not_found" };
+  if (!isTaskInWorkerScope(worker, taskId)) return { ok: false, error: "task_scope_violation" };
   const existing = await deps.readTask(deps.teamName, taskId, deps.cwd);
   if (!existing) return { ok: false, error: "task_not_found" };
   const readiness = await computeTaskReadiness(deps.teamName, taskId, deps.cwd, deps);
@@ -27339,6 +27420,10 @@ async function claimTask(taskId, workerName2, expectedVersion, deps) {
     const current = await deps.readTask(deps.teamName, taskId, deps.cwd);
     if (!current) return { ok: false, error: "task_not_found" };
     const v = deps.normalizeTask(current);
+    const cfgAfterLock = await deps.readTeamConfig(deps.teamName, deps.cwd);
+    const workerAfterLock = cfgAfterLock ? findWorkerScope(cfgAfterLock, workerName2) : null;
+    if (!workerAfterLock) return { ok: false, error: "worker_not_found" };
+    if (!isTaskInWorkerScope(workerAfterLock, taskId)) return { ok: false, error: "task_scope_violation" };
     if (expectedVersion !== null && v.version !== expectedVersion) return { ok: false, error: "claim_conflict" };
     const readinessAfterLock = await computeTaskReadiness(deps.teamName, taskId, deps.cwd, deps);
     if (readinessAfterLock.ready === false) {
@@ -27400,6 +27485,10 @@ async function transitionTaskStatus(taskId, from, to, claimToken, terminalData, 
     if (!v.owner || !v.claim || v.claim.owner !== v.owner || v.claim.token !== claimToken) {
       return { ok: false, error: "claim_conflict" };
     }
+    const cfg = await deps.readTeamConfig(deps.teamName, deps.cwd);
+    const scopedWorker = cfg ? findWorkerScope(cfg, v.claim.owner) : null;
+    if (!scopedWorker) return { ok: false, error: "worker_not_found" };
+    if (!isTaskInWorkerScope(scopedWorker, taskId)) return { ok: false, error: "task_scope_violation" };
     if (new Date(v.claim.leased_until) <= /* @__PURE__ */ new Date()) return { ok: false, error: "lease_expired" };
     const normalizedResult = typeof terminalData?.result === "string" ? terminalData.result : void 0;
     const normalizedError = typeof terminalData?.error === "string" ? terminalData.error : void 0;
@@ -27450,7 +27539,12 @@ async function transitionTaskStatus(taskId, from, to, claimToken, terminalData, 
   }
   return lock.value;
 }
-async function releaseTaskClaim(taskId, claimToken, _workerName, deps) {
+async function releaseTaskClaim(taskId, claimToken, workerName2, deps) {
+  const cfg = await deps.readTeamConfig(deps.teamName, deps.cwd);
+  if (!cfg) return { ok: false, error: "worker_not_found" };
+  const worker = findWorkerScope(cfg, workerName2);
+  if (!worker) return { ok: false, error: "worker_not_found" };
+  if (!isTaskInWorkerScope(worker, taskId)) return { ok: false, error: "task_scope_violation" };
   const lock = await deps.withTaskClaimLock(deps.teamName, taskId, deps.cwd, async () => {
     const current = await deps.readTask(deps.teamName, taskId, deps.cwd);
     if (!current) return { ok: false, error: "task_not_found" };
@@ -27460,6 +27554,10 @@ async function releaseTaskClaim(taskId, claimToken, _workerName, deps) {
     if (!v.owner || !v.claim || v.claim.owner !== v.owner || v.claim.token !== claimToken) {
       return { ok: false, error: "claim_conflict" };
     }
+    const cfg2 = await deps.readTeamConfig(deps.teamName, deps.cwd);
+    const scopedWorker = cfg2 ? findWorkerScope(cfg2, v.claim.owner) : null;
+    if (!scopedWorker) return { ok: false, error: "worker_not_found" };
+    if (!isTaskInWorkerScope(scopedWorker, taskId)) return { ok: false, error: "task_scope_violation" };
     if (new Date(v.claim.leased_until) <= /* @__PURE__ */ new Date()) return { ok: false, error: "lease_expired" };
     const updated = {
       ...v,
@@ -29264,13 +29362,40 @@ function buildWorkerArgv(agentType, config2) {
   const args = buildLaunchArgs(agentType, config2);
   return [binary, ...args];
 }
-function getWorkerEnv(teamName, workerName2, agentType, env2 = process.env) {
+function setIfText(target, key, value) {
+  if (typeof value === "string" && value.trim() !== "") {
+    target[key] = value;
+  }
+}
+function serializeTaskScope(taskScope) {
+  if (!taskScope) return void 0;
+  const normalized = taskScope.map((taskId) => taskId.trim()).filter((taskId, index, all) => taskId.length > 0 && all.indexOf(taskId) === index);
+  return normalized.length > 0 ? normalized.join(",") : void 0;
+}
+function getWorkerEnv(teamName, workerName2, agentType, env2 = process.env, options = {}) {
   validateTeamName(teamName);
+  const workerIdentity = `${teamName}/${workerName2}`;
   const workerEnv = {
-    OMC_TEAM_WORKER: `${teamName}/${workerName2}`,
+    OMC_TEAM_WORKER: workerIdentity,
+    OMX_TEAM_WORKER: workerIdentity,
     OMC_TEAM_NAME: teamName,
-    OMC_WORKER_AGENT_TYPE: agentType
+    OMX_TEAM_NAME: teamName,
+    OMC_WORKER_AGENT_TYPE: agentType,
+    OMX_WORKER_AGENT_TYPE: agentType,
+    OMC_TEAM_WORKER_CLI: agentType,
+    OMX_TEAM_WORKER_CLI: agentType
   };
+  setIfText(workerEnv, "OMC_TEAM_LEADER_CWD", options.leaderCwd);
+  setIfText(workerEnv, "OMX_TEAM_LEADER_CWD", options.leaderCwd);
+  setIfText(workerEnv, "OMC_TEAM_WORKER_CWD", options.workerCwd);
+  setIfText(workerEnv, "OMX_TEAM_WORKER_CWD", options.workerCwd);
+  setIfText(workerEnv, "OMC_TEAM_STATE_ROOT", options.teamStateRoot);
+  setIfText(workerEnv, "OMX_TEAM_STATE_ROOT", options.teamStateRoot);
+  setIfText(workerEnv, "OMC_TEAM_ROOT", options.teamRoot);
+  setIfText(workerEnv, "OMX_TEAM_ROOT", options.teamRoot);
+  const taskScope = serializeTaskScope(options.taskScope);
+  setIfText(workerEnv, "OMC_TEAM_TASK_SCOPE", taskScope);
+  setIfText(workerEnv, "OMX_TEAM_TASK_SCOPE", taskScope);
   for (const key of WORKER_MODEL_ENV_ALLOWLIST) {
     const value = env2[key];
     if (typeof value === "string" && value.length > 0) {
@@ -29582,15 +29707,17 @@ function buildWorkerProcessLaunchSpec(teamName, workerIndex, launchArgs = [], cw
   const nodePath = effectiveEnv[OMC_LEADER_NODE_PATH_ENV]?.trim() || effectiveEnv[OMX_LEADER_NODE_PATH_ENV]?.trim() || process.execPath;
   const command = resolveWorkerCliPath(workerCli, effectiveEnv);
   const envOut = {
+    ...extraEnv,
     OMC_TEAM_WORKER: internalWorkerIdentity,
     OMX_TEAM_WORKER: internalWorkerIdentity,
+    OMC_TEAM_NAME: teamName,
+    OMX_TEAM_NAME: teamName,
     OMC_LEADER_NODE_PATH: nodePath,
     OMX_LEADER_NODE_PATH: nodePath,
     OMC_LEADER_CLI_PATH: command,
     OMX_LEADER_CLI_PATH: command,
     OMC_TMUX_HUD_OWNER: "1",
-    OMX_TMUX_HUD_OWNER: "1",
-    ...extraEnv
+    OMX_TMUX_HUD_OWNER: "1"
   };
   void cwd2;
   return { workerCli, command, args, env: envOut };
@@ -33124,6 +33251,53 @@ function resolveTaskAssignment(task, resolvedRouting, roleRoutingConfig, resolve
     role: canonical
   };
 }
+function isCliAgentType(value) {
+  return value === "claude" || value === "codex" || value === "gemini" || value === "cursor";
+}
+function normalizeCanonicalWorkerRole(role) {
+  if (!role) return null;
+  const knownAgentRoleAliases = {
+    codeReviewer: "code-reviewer",
+    securityReviewer: "security-reviewer",
+    testEngineer: "test-engineer",
+    codeSimplifier: "code-simplifier",
+    documentSpecialist: "document-specialist"
+  };
+  const normalized = knownAgentRoleAliases[role] ?? normalizeDelegationRole(role);
+  return CANONICAL_TEAM_ROLES.includes(normalized) ? normalized : null;
+}
+function getWorkerOverride(overrides, workerName2, workerIndex) {
+  if (!overrides) return void 0;
+  return overrides[workerName2] ?? overrides[String(workerIndex + 1)];
+}
+function applyWorkerOverride(base, override, resolvedRouting, resolvedBinaryPaths) {
+  if (!override) return { ...base, extraFlags: [] };
+  const overrideRole = normalizeCanonicalWorkerRole(override.role ?? override.agent);
+  const routedPair = overrideRole ? resolvedRouting[overrideRole] : void 0;
+  let next = { ...base, ...overrideRole ? { role: overrideRole } : {} };
+  if (override.provider) {
+    if (!isCliAgentType(override.provider)) {
+      throw new Error(`Unsupported team.workerOverrides provider: ${override.provider}`);
+    }
+    next = { ...next, agentType: override.provider };
+  } else if (routedPair) {
+    const primaryProvider = routedPair.primary.provider;
+    const chosen = isCliAgentType(primaryProvider) && resolvedBinaryPaths[primaryProvider] ? routedPair.primary : routedPair.fallback;
+    if (isCliAgentType(chosen.provider)) {
+      next = { ...next, agentType: chosen.provider, model: chosen.model };
+    }
+  }
+  if (override.model && override.model.trim().length > 0) {
+    next = { ...next, model: override.model.trim() };
+  }
+  const extraFlags = Array.isArray(override.extraFlags) ? override.extraFlags.filter((flag) => typeof flag === "string" && flag.trim().length > 0) : [];
+  const reasoning = override.reasoning;
+  return {
+    ...next,
+    extraFlags,
+    ...reasoning ? { reasoning } : {}
+  };
+}
 function sanitizeTeamName(name) {
   const sanitized = name.toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 30);
   if (!sanitized) throw new Error(`Invalid team name: "${name}" produces empty slug after sanitization`);
@@ -33333,12 +33507,24 @@ async function spawnV2Worker(opts) {
       cliOutputContract
     );
   }
+  const serializedTaskScope = (opts.taskScope ?? []).map((taskId) => taskId.trim()).filter((taskId, index, all) => taskId.length > 0 && all.indexOf(taskId) === index).join(",");
   const envVars = {
-    ...getWorkerEnv(opts.teamName, opts.workerName, opts.agentType),
+    ...getWorkerEnv(opts.teamName, opts.workerName, opts.agentType, process.env, {
+      leaderCwd: opts.cwd,
+      workerCwd: opts.workerCwd ?? opts.cwd,
+      teamStateRoot: teamStateRoot(opts.cwd, opts.teamName),
+      teamRoot: opts.teamRoot ?? opts.cwd,
+      taskScope: opts.taskScope
+    }),
     OMC_TEAM_STATE_ROOT: teamStateRoot(opts.cwd, opts.teamName),
+    OMX_TEAM_STATE_ROOT: teamStateRoot(opts.cwd, opts.teamName),
     OMC_TEAM_LEADER_CWD: opts.cwd,
-    ...opts.worktreePath ? { OMC_TEAM_WORKTREE_PATH: opts.worktreePath } : {},
-    ...opts.workerCwd ? { OMC_TEAM_WORKER_CWD: opts.workerCwd } : {}
+    OMX_TEAM_LEADER_CWD: opts.cwd,
+    OMC_TEAM_ROOT: opts.teamRoot ?? opts.cwd,
+    OMX_TEAM_ROOT: opts.teamRoot ?? opts.cwd,
+    ...serializedTaskScope ? { OMC_TEAM_TASK_SCOPE: serializedTaskScope, OMX_TEAM_TASK_SCOPE: serializedTaskScope } : {},
+    ...opts.worktreePath ? { OMC_TEAM_WORKTREE_PATH: opts.worktreePath, OMX_TEAM_WORKTREE_PATH: opts.worktreePath } : {},
+    ...opts.workerCwd ? { OMC_TEAM_WORKER_CWD: opts.workerCwd, OMX_TEAM_WORKER_CWD: opts.workerCwd } : {}
   };
   const resolvedBinaryPath = opts.resolvedBinaryPaths[opts.agentType] ?? resolveValidatedBinaryPath(opts.agentType);
   const modelForAgent = opts.model ?? (() => {
@@ -33352,9 +33538,9 @@ async function spawnV2Worker(opts) {
   })();
   const workerExtraFlags = resolveWorkerLaunchExtraFlags(
     process.env,
-    [],
+    opts.launchExtraFlags ?? [],
     modelForAgent,
-    opts.agentType === "codex" ? resolveAgentReasoningEffort(opts.role ?? void 0) : void 0
+    opts.agentType === "codex" ? opts.reasoning ?? resolveAgentReasoningEffort(opts.role ?? void 0) : void 0
   );
   const [launchBinary, ...launchArgs] = buildWorkerArgv(opts.agentType, {
     teamName: opts.teamName,
@@ -33641,6 +33827,14 @@ async function startTeamV2(config2) {
       startupAllocations.push({ workerName: r.workerName, taskIndex: Number(r.taskId) });
     }
   }
+  const startupTaskScopes = /* @__PURE__ */ new Map();
+  for (const name of workerNames) startupTaskScopes.set(name, []);
+  for (const allocation of startupAllocations) {
+    const scope = startupTaskScopes.get(allocation.workerName);
+    if (!scope) continue;
+    const taskId = String(allocation.taskIndex + 1);
+    if (!scope.includes(taskId)) scope.push(taskId);
+  }
   try {
     for (let i = 0; i < workerNames.length; i++) {
       const wName = workerNames[i];
@@ -33689,6 +33883,7 @@ async function startTeamV2(config2) {
       index: i + 1,
       role: config2.workerRoles?.[i] ?? (agentTypes[i % agentTypes.length] ?? agentTypes[0] ?? "claude"),
       assigned_tasks: [],
+      task_scope: startupTaskScopes.get(wName) ?? [],
       working_dir: worktree?.path ?? leaderCwd,
       team_state_root: teamStateRoot(leaderCwd, sanitized),
       ...worktree ? {
@@ -33721,8 +33916,10 @@ async function startTeamV2(config2) {
     resize_hook_name: null,
     resize_hook_target: null,
     resolved_routing: resolvedRouting,
+    ...pluginCfg.team?.workerOverrides ? { worker_overrides: pluginCfg.team.workerOverrides } : {},
     workspace_mode: workspaceMode,
-    worktree_mode: worktreeMode
+    worktree_mode: worktreeMode,
+    auto_merge: Boolean(config2.autoMerge)
   };
   try {
     await saveTeamConfig(teamConfig, leaderCwd);
@@ -33768,7 +33965,8 @@ async function startTeamV2(config2) {
     hud_pane_id: null,
     resize_hook_name: null,
     resize_hook_target: null,
-    next_worker_index: teamConfig.next_worker_index
+    next_worker_index: teamConfig.next_worker_index,
+    ...teamConfig.worker_overrides ? { worker_overrides: teamConfig.worker_overrides } : {}
   };
   try {
     await (0, import_promises17.writeFile)(absPath(leaderCwd, TeamPaths.manifest(sanitized)), JSON.stringify(teamManifest, null, 2), "utf-8");
@@ -33800,12 +33998,19 @@ async function startTeamV2(config2) {
       const task = config2.tasks[decision.taskIndex];
       if (!task || workerIndex < 0) continue;
       const fallbackAgent = agentTypes[workerIndex % agentTypes.length] ?? agentTypes[0] ?? "claude";
-      const assignment = resolveTaskAssignment(
+      const baseAssignment = resolveTaskAssignment(
         task,
         resolvedRouting,
         pluginCfg.team?.roleRouting,
         resolvedBinaryPaths,
         fallbackAgent
+      );
+      const workerOverride = getWorkerOverride(teamConfig.worker_overrides, wName, workerIndex);
+      const assignment = applyWorkerOverride(
+        baseAssignment,
+        workerOverride,
+        resolvedRouting,
+        resolvedBinaryPaths
       );
       const workerLaunch = await spawnV2Worker({
         sessionName: sessionName2,
@@ -33820,10 +34025,14 @@ async function startTeamV2(config2) {
         cwd: leaderCwd,
         workerCwd: workersInfo[workerIndex]?.working_dir ?? leaderCwd,
         worktreePath: workersInfo[workerIndex]?.worktree_path,
+        teamRoot: leaderCwd,
+        taskScope: workersInfo[workerIndex]?.task_scope ?? [],
         autoMerge: Boolean(config2.autoMerge),
         resolvedBinaryPaths,
         ...assignment.model ? { model: assignment.model } : {},
-        ...assignment.role ? { role: assignment.role } : {}
+        ...assignment.role ? { role: assignment.role } : {},
+        ...assignment.extraFlags.length > 0 ? { launchExtraFlags: assignment.extraFlags } : {},
+        ...assignment.reasoning ? { reasoning: assignment.reasoning } : {}
       });
       if (workerLaunch.paneId) {
         workerPaneIds.push(workerLaunch.paneId);
@@ -33832,6 +34041,7 @@ async function startTeamV2(config2) {
           workerInfo.pane_id = workerLaunch.paneId;
           workerInfo.assigned_tasks = workerLaunch.startupAssigned ? [taskId] : [];
           workerInfo.worker_cli = assignment.agentType;
+          if (workerOverride && assignment.role) workerInfo.role = assignment.role;
           if (workerLaunch.outputFile) {
             workerInfo.output_file = workerLaunch.outputFile;
           }
@@ -35041,7 +35251,10 @@ async function integrateWorkerCommitsIntoLeader(teamName, cwd2) {
     ...previous?.integrationByWorker ?? {}
   };
   const config2 = await readJsonSafe5((0, import_path94.join)(stateRoot(cwd2, teamName), "config.json"));
-  const workers = config2?.workers ?? [];
+  if (config2?.autoMerge !== true && config2?.auto_merge !== true) {
+    return integrationByWorker;
+  }
+  const workers = config2.workers ?? [];
   let leaderHead = gitMaybe(cwd2, ["rev-parse", "HEAD"]);
   if (!leaderHead) return integrationByWorker;
   for (const worker of workers) {
@@ -87512,6 +87725,16 @@ function parseTeamWorkerEnv(raw) {
 function parseTeamWorkerContextFromEnv(env2 = process.env) {
   return parseTeamWorkerEnv(env2.OMC_TEAM_WORKER) ?? parseTeamWorkerEnv(env2.OMX_TEAM_WORKER);
 }
+function validateWorkerIdentity(teamName, workerName2) {
+  const identity = parseTeamWorkerContextFromEnv();
+  if (!identity) return null;
+  if (identity.workerName === "leader-fixed") return null;
+  if (identity.teamName === teamName && identity.workerName === workerName2) return null;
+  return {
+    code: "worker_identity_mismatch",
+    message: `worker identity ${identity.teamName}/${identity.workerName} cannot act as ${teamName}/${workerName2}`
+  };
+}
 function readTeamStateRootFromEnv(env2 = process.env) {
   const candidate = typeof env2.OMC_TEAM_STATE_ROOT === "string" && env2.OMC_TEAM_STATE_ROOT.trim() !== "" ? env2.OMC_TEAM_STATE_ROOT.trim() : typeof env2.OMX_TEAM_STATE_ROOT === "string" && env2.OMX_TEAM_STATE_ROOT.trim() !== "" ? env2.OMX_TEAM_STATE_ROOT.trim() : "";
   return candidate || null;
@@ -87970,6 +88193,8 @@ async function executeTeamApiOperation(operation, args, fallbackCwd) {
         if (rawExpectedVersion !== void 0 && (!isFiniteInteger(rawExpectedVersion) || rawExpectedVersion < 1)) {
           return { ok: false, operation, error: { code: "invalid_input", message: "expected_version must be a positive integer when provided" } };
         }
+        const identityError = validateWorkerIdentity(teamName, worker);
+        if (identityError) return { ok: false, operation, error: identityError };
         const result = await teamClaimTask(teamName, taskId, worker, rawExpectedVersion ?? null, cwd2);
         return { ok: true, operation, data: result };
       }
@@ -87994,6 +88219,12 @@ async function executeTeamApiOperation(operation, args, fallbackCwd) {
         if (transitionError !== void 0 && typeof transitionError !== "string") {
           return { ok: false, operation, error: { code: "invalid_input", message: "error must be a string when provided" } };
         }
+        const task = await teamReadTask(teamName, taskId, cwd2);
+        if (!task) return { ok: false, operation, error: { code: "task_not_found", message: "task_not_found" } };
+        if (task.owner) {
+          const identityError = validateWorkerIdentity(teamName, task.owner);
+          if (identityError) return { ok: false, operation, error: identityError };
+        }
         const result = await teamTransitionTaskStatus(
           teamName,
           taskId,
@@ -88016,6 +88247,8 @@ async function executeTeamApiOperation(operation, args, fallbackCwd) {
         if (!teamName || !taskId || !claimToken || !worker) {
           return { ok: false, operation, error: { code: "invalid_input", message: "team_name, task_id, claim_token, worker are required" } };
         }
+        const identityError = validateWorkerIdentity(teamName, worker);
+        if (identityError) return { ok: false, operation, error: identityError };
         const result = await teamReleaseTaskClaim(teamName, taskId, claimToken, worker, cwd2);
         return { ok: true, operation, data: result };
       }

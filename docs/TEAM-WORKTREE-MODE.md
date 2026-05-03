@@ -56,6 +56,36 @@ Config, manifest, worker identity, and status surfaces should expose the same lo
 
 Human status output should also surface the mode and worktree path/branch details enough for users to understand where worker changes live and whether cleanup preserved a dirty worktree.
 
+## Per-worker launch overrides
+
+`team.workerOverrides` is an additive config/API surface for pinning a specific worker's launch tuple without changing the rest of the team. Keys may be worker names (`worker-1`) or 1-based indexes (`1`). Supported fields are:
+
+- `provider`: `claude`, `codex`, or `gemini`
+- `model`: explicit model ID for that worker
+- `role` / `agent`: canonical team role used for role metadata and Codex reasoning defaults
+- `extraFlags`: additional CLI args inherited only by that worker
+- `reasoning`: Codex reasoning effort (`low`, `medium`, `high`, `xhigh`)
+
+Example:
+
+```jsonc
+{
+  "team": {
+    "workerOverrides": {
+      "worker-1": {
+        "provider": "codex",
+        "model": "gpt-5.5",
+        "role": "executor",
+        "reasoning": "high",
+        "extraFlags": ["--profile", "team-worker"]
+      }
+    }
+  }
+}
+```
+
+Overrides are captured into the team config/manifest as `worker_overrides` at team creation so runtime-v2 startup and later scale-up use the same immutable launch decisions. Unspecified workers continue to use normal CLI agent selection and role routing.
+
 ## Backport parity matrix
 
 Use this compact matrix when reviewing OMX-team behavior that is adapted into OMC. Update the evidence column in PR notes when a row changes.

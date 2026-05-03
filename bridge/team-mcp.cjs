@@ -18221,7 +18221,11 @@ function workerPriority(worker) {
   if (typeof worker.index === "number" && worker.index > 0) return 1;
   return 0;
 }
-function mergeAssignedTasks(primary, secondary) {
+function mergeUniqueStrings(primary, secondary) {
+  return mergeUniqueStringsOptional(primary, secondary) ?? [];
+}
+function mergeUniqueStringsOptional(primary, secondary) {
+  if (!Array.isArray(primary) && !Array.isArray(secondary)) return void 0;
   const merged = [];
   for (const taskId of [...primary ?? [], ...secondary ?? []]) {
     if (typeof taskId !== "string" || taskId.trim() === "" || merged.includes(taskId)) continue;
@@ -18268,7 +18272,7 @@ function canonicalizeWorkers(workers) {
     byName.set(name, {
       ...winner,
       name,
-      assigned_tasks: mergeAssignedTasks(winner.assigned_tasks, loser.assigned_tasks),
+      assigned_tasks: mergeUniqueStrings(winner.assigned_tasks, loser.assigned_tasks),
       pane_id: backfillText(winner.pane_id, loser.pane_id),
       pid: backfillNumber(winner.pid, loser.pid),
       index: backfillNumber(winner.index, loser.index, (value) => value > 0) ?? 0,
@@ -18280,7 +18284,9 @@ function canonicalizeWorkers(workers) {
       worktree_branch: backfillText(winner.worktree_branch, loser.worktree_branch),
       worktree_detached: backfillBoolean(winner.worktree_detached, loser.worktree_detached),
       worktree_created: backfillBoolean(winner.worktree_created, loser.worktree_created),
-      team_state_root: backfillText(winner.team_state_root, loser.team_state_root)
+      team_state_root: backfillText(winner.team_state_root, loser.team_state_root),
+      team_root: backfillText(winner.team_root, loser.team_root),
+      task_scope: mergeUniqueStringsOptional(winner.task_scope, loser.task_scope)
     });
   }
   return {

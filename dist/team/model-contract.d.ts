@@ -86,7 +86,14 @@ export declare function resolveValidatedBinaryPath(agentType: CliAgentType): str
 export declare function buildLaunchArgs(agentType: CliAgentType, config: WorkerLaunchConfig): string[];
 export declare function buildWorkerArgv(agentType: CliAgentType, config: WorkerLaunchConfig): string[];
 export declare function buildWorkerCommand(agentType: CliAgentType, config: WorkerLaunchConfig): string;
-export declare function getWorkerEnv(teamName: string, workerName: string, agentType: CliAgentType, env?: NodeJS.ProcessEnv): Record<string, string>;
+export interface WorkerEnvIsolationOptions {
+    leaderCwd?: string;
+    workerCwd?: string;
+    teamStateRoot?: string;
+    teamRoot?: string;
+    taskScope?: readonly string[];
+}
+export declare function getWorkerEnv(teamName: string, workerName: string, agentType: CliAgentType, env?: NodeJS.ProcessEnv, options?: WorkerEnvIsolationOptions): Record<string, string>;
 export declare function parseCliOutput(agentType: CliAgentType, rawOutput: string): string;
 /**
  * Check if an agent type supports prompt/headless mode (bypasses TUI).

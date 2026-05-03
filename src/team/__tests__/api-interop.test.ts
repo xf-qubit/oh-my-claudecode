@@ -97,4 +97,36 @@ describe('team api interop', () => {
       await rm(cwd, { recursive: true, force: true });
     }
   });
+
+  it('rejects worker API task ownership operations from mismatched worker identity', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omc-api-worker-identity-'));
+    const previous = process.env.OMC_TEAM_WORKER;
+    try {
+      await initTeamState(teamConfig('api-team', cwd), cwd);
+      const task = await createTask('api-team', { subject: 'api task', description: 'd', status: 'pending' }, cwd);
+
+      process.env.OMC_TEAM_WORKER = 'api-team/worker-2';
+      const claim = await executeTeamApiOperation('claim-task', {
+        team_name: 'api-team',
+        task_id: task.id,
+        worker: 'worker-1',
+        expected_version: task.version ?? 1,
+      }, cwd);
+
+      expect(claim.ok).toBe(false);
+      expect(claim.ok ? '' : claim.error.code).toBe('worker_identity_mismatch');
+
+      const ownClaim = await executeTeamApiOperation('claim-task', {
+        team_name: 'api-team',
+        task_id: task.id,
+        worker: 'worker-2',
+        expected_version: task.version ?? 1,
+      }, cwd);
+      expect(ownClaim.ok).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env.OMC_TEAM_WORKER;
+      else process.env.OMC_TEAM_WORKER = previous;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
 });

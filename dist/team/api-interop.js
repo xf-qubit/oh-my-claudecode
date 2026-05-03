@@ -318,6 +318,19 @@ function parseTeamWorkerEnv(raw) {
 function parseTeamWorkerContextFromEnv(env = process.env) {
     return parseTeamWorkerEnv(env.OMC_TEAM_WORKER) ?? parseTeamWorkerEnv(env.OMX_TEAM_WORKER);
 }
+function validateWorkerIdentity(teamName, workerName) {
+    const identity = parseTeamWorkerContextFromEnv();
+    if (!identity)
+        return null;
+    if (identity.workerName === 'leader-fixed')
+        return null;
+    if (identity.teamName === teamName && identity.workerName === workerName)
+        return null;
+    return {
+        code: 'worker_identity_mismatch',
+        message: `worker identity ${identity.teamName}/${identity.workerName} cannot act as ${teamName}/${workerName}`,
+    };
+}
 function readTeamStateRootFromEnv(env = process.env) {
     const candidate = typeof env.OMC_TEAM_STATE_ROOT === 'string' && env.OMC_TEAM_STATE_ROOT.trim() !== ''
         ? env.OMC_TEAM_STATE_ROOT.trim()
@@ -802,6 +815,9 @@ export async function executeTeamApiOperation(operation, args, fallbackCwd) {
                 if (rawExpectedVersion !== undefined && (!isFiniteInteger(rawExpectedVersion) || rawExpectedVersion < 1)) {
                     return { ok: false, operation, error: { code: 'invalid_input', message: 'expected_version must be a positive integer when provided' } };
                 }
+                const identityError = validateWorkerIdentity(teamName, worker);
+                if (identityError)
+                    return { ok: false, operation, error: identityError };
                 const result = await teamClaimTask(teamName, taskId, worker, rawExpectedVersion ?? null, cwd);
                 return { ok: true, operation, data: result };
             }
@@ -826,6 +842,14 @@ export async function executeTeamApiOperation(operation, args, fallbackCwd) {
                 if (transitionError !== undefined && typeof transitionError !== 'string') {
                     return { ok: false, operation, error: { code: 'invalid_input', message: 'error must be a string when provided' } };
                 }
+                const task = await teamReadTask(teamName, taskId, cwd);
+                if (!task)
+                    return { ok: false, operation, error: { code: 'task_not_found', message: 'task_not_found' } };
+                if (task.owner) {
+                    const identityError = validateWorkerIdentity(teamName, task.owner);
+                    if (identityError)
+                        return { ok: false, operation, error: identityError };
+                }
                 const result = await teamTransitionTaskStatus(teamName, taskId, from, to, claimToken, cwd, {
                     result: typeof transitionResult === 'string' ? transitionResult : undefined,
                     error: typeof transitionError === 'string' ? transitionError : undefined,
@@ -840,6 +864,9 @@ export async function executeTeamApiOperation(operation, args, fallbackCwd) {
                 if (!teamName || !taskId || !claimToken || !worker) {
                     return { ok: false, operation, error: { code: 'invalid_input', message: 'team_name, task_id, claim_token, worker are required' } };
                 }
+                const identityError = validateWorkerIdentity(teamName, worker);
+                if (identityError)
+                    return { ok: false, operation, error: identityError };
                 const result = await teamReleaseTaskClaim(teamName, taskId, claimToken, worker, cwd);
                 return { ok: true, operation, data: result };
             }

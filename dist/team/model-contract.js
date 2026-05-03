@@ -520,13 +520,43 @@ const WORKER_MODEL_ENV_ALLOWLIST = [
     'OMC_EXTERNAL_MODELS_DEFAULT_GEMINI_MODEL',
     'OMC_GEMINI_DEFAULT_MODEL',
 ];
-export function getWorkerEnv(teamName, workerName, agentType, env = process.env) {
+function setIfText(target, key, value) {
+    if (typeof value === 'string' && value.trim() !== '') {
+        target[key] = value;
+    }
+}
+function serializeTaskScope(taskScope) {
+    if (!taskScope)
+        return undefined;
+    const normalized = taskScope
+        .map((taskId) => taskId.trim())
+        .filter((taskId, index, all) => taskId.length > 0 && all.indexOf(taskId) === index);
+    return normalized.length > 0 ? normalized.join(',') : undefined;
+}
+export function getWorkerEnv(teamName, workerName, agentType, env = process.env, options = {}) {
     validateTeamName(teamName);
+    const workerIdentity = `${teamName}/${workerName}`;
     const workerEnv = {
-        OMC_TEAM_WORKER: `${teamName}/${workerName}`,
+        OMC_TEAM_WORKER: workerIdentity,
+        OMX_TEAM_WORKER: workerIdentity,
         OMC_TEAM_NAME: teamName,
+        OMX_TEAM_NAME: teamName,
         OMC_WORKER_AGENT_TYPE: agentType,
+        OMX_WORKER_AGENT_TYPE: agentType,
+        OMC_TEAM_WORKER_CLI: agentType,
+        OMX_TEAM_WORKER_CLI: agentType,
     };
+    setIfText(workerEnv, 'OMC_TEAM_LEADER_CWD', options.leaderCwd);
+    setIfText(workerEnv, 'OMX_TEAM_LEADER_CWD', options.leaderCwd);
+    setIfText(workerEnv, 'OMC_TEAM_WORKER_CWD', options.workerCwd);
+    setIfText(workerEnv, 'OMX_TEAM_WORKER_CWD', options.workerCwd);
+    setIfText(workerEnv, 'OMC_TEAM_STATE_ROOT', options.teamStateRoot);
+    setIfText(workerEnv, 'OMX_TEAM_STATE_ROOT', options.teamStateRoot);
+    setIfText(workerEnv, 'OMC_TEAM_ROOT', options.teamRoot);
+    setIfText(workerEnv, 'OMX_TEAM_ROOT', options.teamRoot);
+    const taskScope = serializeTaskScope(options.taskScope);
+    setIfText(workerEnv, 'OMC_TEAM_TASK_SCOPE', taskScope);
+    setIfText(workerEnv, 'OMX_TEAM_TASK_SCOPE', taskScope);
     for (const key of WORKER_MODEL_ENV_ALLOWLIST) {
         const value = env[key];
         if (typeof value === 'string' && value.length > 0) {

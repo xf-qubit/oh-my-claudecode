@@ -1263,6 +1263,7 @@ function parseLegacyStartAlias(args: string[]): TeamLegacyStartArgs | null {
       agentType = approvedHintOutcome.hint.agentType
         ? normalizeAgentType(approvedHintOutcome.hint.agentType)
         : agentType;
+      autoMerge = approvedHintOutcome.hint.autoMerge === true ? true : autoMerge;
       ralph = approvedHintOutcome.hint.linkedRalph === true ? true : ralph;
     }
   } else {

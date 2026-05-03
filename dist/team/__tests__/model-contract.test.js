@@ -292,6 +292,44 @@ describe('model-contract', () => {
             expect(env.OMC_GEMINI_DEFAULT_MODEL).toBe('gemini-2.5-pro');
             expect(env.ANTHROPIC_API_KEY).toBeUndefined();
         });
+        it('scrubs stale team env while setting explicit worker isolation fields and aliases', () => {
+            const env = getWorkerEnv('my-team', 'worker-1', 'codex', {
+                OMC_TEAM_STATE_ROOT: '/stale/omc-state',
+                OMX_TEAM_STATE_ROOT: '/stale/omx-state',
+                OMC_TEAM_WORKER_CWD: '/stale/cwd',
+                OMC_WORKER_AGENT_TYPE: 'claude',
+                ANTHROPIC_API_KEY: 'should-not-be-forwarded',
+                OMC_MODEL_LOW: 'gpt-5.3-codex-spark',
+            }, {
+                leaderCwd: '/repo',
+                workerCwd: '/repo/.omc/team/my-team/worktrees/worker-1',
+                teamStateRoot: '/repo/.omc/state/team/my-team',
+                teamRoot: '/repo',
+                taskScope: ['2', '2', ''],
+            });
+            expect(env).toMatchObject({
+                OMC_TEAM_WORKER: 'my-team/worker-1',
+                OMX_TEAM_WORKER: 'my-team/worker-1',
+                OMC_TEAM_NAME: 'my-team',
+                OMX_TEAM_NAME: 'my-team',
+                OMC_WORKER_AGENT_TYPE: 'codex',
+                OMX_WORKER_AGENT_TYPE: 'codex',
+                OMC_TEAM_WORKER_CLI: 'codex',
+                OMX_TEAM_WORKER_CLI: 'codex',
+                OMC_TEAM_LEADER_CWD: '/repo',
+                OMX_TEAM_LEADER_CWD: '/repo',
+                OMC_TEAM_WORKER_CWD: '/repo/.omc/team/my-team/worktrees/worker-1',
+                OMX_TEAM_WORKER_CWD: '/repo/.omc/team/my-team/worktrees/worker-1',
+                OMC_TEAM_STATE_ROOT: '/repo/.omc/state/team/my-team',
+                OMX_TEAM_STATE_ROOT: '/repo/.omc/state/team/my-team',
+                OMC_TEAM_ROOT: '/repo',
+                OMX_TEAM_ROOT: '/repo',
+                OMC_TEAM_TASK_SCOPE: '2',
+                OMX_TEAM_TASK_SCOPE: '2',
+                OMC_MODEL_LOW: 'gpt-5.3-codex-spark',
+            });
+            expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+        });
         it('rejects invalid team names', () => {
             expect(() => getWorkerEnv('Bad-Team', 'worker-1', 'codex')).toThrow('Invalid team name');
         });

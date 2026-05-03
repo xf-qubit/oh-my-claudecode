@@ -163,15 +163,17 @@ export function buildWorkerProcessLaunchSpec(
     || process.execPath;
   const command = resolveWorkerCliPath(workerCli, effectiveEnv);
   const envOut: Record<string, string> = {
+    ...extraEnv,
     OMC_TEAM_WORKER: internalWorkerIdentity,
     OMX_TEAM_WORKER: internalWorkerIdentity,
+    OMC_TEAM_NAME: teamName,
+    OMX_TEAM_NAME: teamName,
     OMC_LEADER_NODE_PATH: nodePath,
     OMX_LEADER_NODE_PATH: nodePath,
     OMC_LEADER_CLI_PATH: command,
     OMX_LEADER_CLI_PATH: command,
     OMC_TMUX_HUD_OWNER: '1',
     OMX_TMUX_HUD_OWNER: '1',
-    ...extraEnv,
   };
   void cwd;
   return { workerCli, command, args, env: envOut };

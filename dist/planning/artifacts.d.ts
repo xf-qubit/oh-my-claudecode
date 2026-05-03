@@ -13,6 +13,7 @@ export interface ApprovedExecutionLaunchHint {
     task: string;
     workerCount?: number;
     agentType?: string;
+    autoMerge?: boolean;
     linkedRalph?: boolean;
     sourcePath: string;
 }

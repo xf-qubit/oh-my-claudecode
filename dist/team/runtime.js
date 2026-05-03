@@ -324,7 +324,10 @@ async function integrateWorkerCommitsIntoLeader(teamName, cwd) {
         ...(previous?.integrationByWorker ?? {}),
     };
     const config = await readJsonSafe(join(stateRoot(cwd, teamName), 'config.json'));
-    const workers = config?.workers ?? [];
+    if (config?.autoMerge !== true && config?.auto_merge !== true) {
+        return integrationByWorker;
+    }
+    const workers = config.workers ?? [];
     let leaderHead = gitMaybe(cwd, ['rev-parse', 'HEAD']);
     if (!leaderHead)
         return integrationByWorker;

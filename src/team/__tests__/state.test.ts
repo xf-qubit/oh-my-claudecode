@@ -20,6 +20,7 @@ import {
   readMonitorSnapshot,
   readTask,
   readTeamConfig,
+  saveTeamConfig,
   readTeamPhase,
   releaseTaskClaim,
   sendDirectMessage,
@@ -113,6 +114,71 @@ describe('team state', () => {
       );
       expect(transition.ok).toBe(true);
       expect((await readTask('team-tasks', task.id, cwd))?.status).toBe('completed');
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+
+  it('enforces restricted worker task scope for claim, transition, and release', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omc-team-state-scope-'));
+    try {
+      const cfg = teamConfig('team-scope', cwd);
+      cfg.workers[0]!.assigned_tasks = ['1'];
+      await initTeamState(cfg, cwd);
+      const first = await createTask('team-scope', { subject: 'allowed', description: 'd', status: 'pending', owner: 'worker-1' }, cwd);
+      const second = await createTask('team-scope', { subject: 'denied', description: 'd', status: 'pending', owner: 'worker-1' }, cwd);
+
+      expect(first.id).toBe('1');
+      expect(second.id).toBe('2');
+
+      const deniedClaim = await claimTask('team-scope', second.id, 'worker-1', second.version ?? 1, cwd);
+      expect(deniedClaim).toEqual({ ok: false, error: 'task_scope_violation' });
+      expect((await readTask('team-scope', second.id, cwd))?.status).toBe('pending');
+
+      const allowedClaim = await claimTask('team-scope', first.id, 'worker-1', first.version ?? 1, cwd);
+      expect(allowedClaim.ok).toBe(true);
+      if (!allowedClaim.ok) return;
+
+      cfg.workers[0]!.assigned_tasks = ['2'];
+      await saveTeamConfig(cfg, cwd);
+
+      const deniedTransition = await transitionTaskStatus(
+        'team-scope',
+        first.id,
+        'in_progress',
+        'completed',
+        allowedClaim.claimToken,
+        { result: 'done' },
+        cwd,
+      );
+      expect(deniedTransition).toEqual({ ok: false, error: 'task_scope_violation' });
+      expect((await readTask('team-scope', first.id, cwd))?.status).toBe('in_progress');
+
+      const deniedRelease = await releaseTaskClaim('team-scope', first.id, 'worker-1', allowedClaim.claimToken, cwd);
+      expect(deniedRelease).toEqual({ ok: false, error: 'task_scope_violation' });
+      expect((await readTask('team-scope', first.id, cwd))?.status).toBe('in_progress');
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('treats explicit empty task_scope as deny-all while preserving legacy assigned_tasks fallback', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omc-team-state-empty-scope-'));
+    try {
+      const cfg = teamConfig('team-empty-scope', cwd);
+      cfg.workers[0]!.task_scope = [];
+      await initTeamState(cfg, cwd);
+      const task = await createTask('team-empty-scope', { subject: 'denied', description: 'd', status: 'pending', owner: 'worker-1' }, cwd);
+
+      expect(await claimTask('team-empty-scope', task.id, 'worker-1', task.version ?? 1, cwd))
+        .toEqual({ ok: false, error: 'task_scope_violation' });
+
+      cfg.workers[0]!.task_scope = undefined;
+      await saveTeamConfig(cfg, cwd);
+
+      const legacyClaim = await claimTask('team-empty-scope', task.id, 'worker-1', task.version ?? 1, cwd);
+      expect(legacyClaim.ok).toBe(true);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

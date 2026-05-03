@@ -131,6 +131,8 @@ export type TeamApiEnvelope =
   | { ok: true; operation: TeamApiOperation; data: Record<string, unknown> }
   | { ok: false; operation: TeamApiOperation | 'unknown'; error: { code: string; message: string; details?: Record<string, unknown> } };
 
+type TeamApiError = Extract<TeamApiEnvelope, { ok: false }>['error'];
+
 const TEAM_STATE_EVENT_WINDOW = 50;
 
 function isFiniteInteger(value: unknown): value is number {
@@ -389,6 +391,17 @@ function parseTeamWorkerEnv(raw: string | undefined): { teamName: string; worker
 
 function parseTeamWorkerContextFromEnv(env: NodeJS.ProcessEnv = process.env): { teamName: string; workerName: string } | null {
   return parseTeamWorkerEnv(env.OMC_TEAM_WORKER) ?? parseTeamWorkerEnv(env.OMX_TEAM_WORKER);
+}
+
+function validateWorkerIdentity(teamName: string, workerName: string): TeamApiError | null {
+  const identity = parseTeamWorkerContextFromEnv();
+  if (!identity) return null;
+  if (identity.workerName === 'leader-fixed') return null;
+  if (identity.teamName === teamName && identity.workerName === workerName) return null;
+  return {
+    code: 'worker_identity_mismatch',
+    message: `worker identity ${identity.teamName}/${identity.workerName} cannot act as ${teamName}/${workerName}`,
+  };
 }
 
 function readTeamStateRootFromEnv(env: NodeJS.ProcessEnv = process.env): string | null {
@@ -969,6 +982,8 @@ export async function executeTeamApiOperation(
         if (rawExpectedVersion !== undefined && (!isFiniteInteger(rawExpectedVersion) || rawExpectedVersion < 1)) {
           return { ok: false, operation, error: { code: 'invalid_input', message: 'expected_version must be a positive integer when provided' } };
         }
+        const identityError = validateWorkerIdentity(teamName, worker);
+        if (identityError) return { ok: false, operation, error: identityError };
         const result = await teamClaimTask(teamName, taskId, worker, (rawExpectedVersion as number | undefined) ?? null, cwd);
         return { ok: true, operation, data: result as unknown as Record<string, unknown> };
       }
@@ -993,6 +1008,12 @@ export async function executeTeamApiOperation(
         if (transitionError !== undefined && typeof transitionError !== 'string') {
           return { ok: false, operation, error: { code: 'invalid_input', message: 'error must be a string when provided' } };
         }
+        const task = await teamReadTask(teamName, taskId, cwd);
+        if (!task) return { ok: false, operation, error: { code: 'task_not_found', message: 'task_not_found' } };
+        if (task.owner) {
+          const identityError = validateWorkerIdentity(teamName, task.owner);
+          if (identityError) return { ok: false, operation, error: identityError };
+        }
         const result = await teamTransitionTaskStatus(
           teamName,
           taskId,
@@ -1015,6 +1036,8 @@ export async function executeTeamApiOperation(
         if (!teamName || !taskId || !claimToken || !worker) {
           return { ok: false, operation, error: { code: 'invalid_input', message: 'team_name, task_id, claim_token, worker are required' } };
         }
+        const identityError = validateWorkerIdentity(teamName, worker);
+        if (identityError) return { ok: false, operation, error: identityError };
         const result = await teamReleaseTaskClaim(teamName, taskId, claimToken, worker, cwd);
         return { ok: true, operation, data: result as unknown as Record<string, unknown> };
       }
