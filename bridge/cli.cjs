@@ -23319,12 +23319,12 @@ function isClaudeAvailable() {
     return false;
   }
 }
-function resolveLaunchPolicy(env2 = process.env, args = []) {
+function resolveLaunchPolicy(env2 = process.env, args = [], options = {}) {
   if (args.some((arg) => arg === "--print" || arg === "-p")) {
     return "direct";
   }
   if (env2.TMUX) return "inside-tmux";
-  if (env2.CMUX_SURFACE_ID) return "direct";
+  if (env2.CMUX_SURFACE_ID && !options.requireTmux) return "direct";
   if (!isTmuxAvailable()) {
     return "direct";
   }
@@ -89058,8 +89058,13 @@ function prepareOmcLaunchConfigDir(baseConfigDir = getClaudeConfigDir()) {
     return baseConfigDir;
   }
   const runtimeConfigDir = (0, import_path121.join)(baseConfigDir, OMC_RUNTIME_DIRNAME);
+  const runtimeClaudeJsonPath = (0, import_path121.join)(runtimeConfigDir, ".claude.json");
+  const preservedClaudeJson = (0, import_fs102.existsSync)(runtimeClaudeJsonPath) ? (0, import_fs102.readFileSync)(runtimeClaudeJsonPath) : null;
   (0, import_fs102.rmSync)(runtimeConfigDir, { recursive: true, force: true });
   (0, import_fs102.mkdirSync)(runtimeConfigDir, { recursive: true });
+  if (preservedClaudeJson) {
+    (0, import_fs102.writeFileSync)(runtimeClaudeJsonPath, preservedClaudeJson);
+  }
   (0, import_fs102.copyFileSync)(companionPath, (0, import_path121.join)(runtimeConfigDir, "CLAUDE.md"));
   for (const entry of [
     "agents",
@@ -89236,22 +89241,57 @@ async function preLaunch(_cwd, _sessionId) {
 function isPrintMode(args) {
   return args.some((arg) => arg === "--print" || arg === "-p");
 }
+function hasMadmaxFlag(args) {
+  return args.some((arg) => arg === MADMAX_FLAG2 || arg === YOLO_FLAG);
+}
+var MadmaxTmuxRequiredError = class extends Error {
+  constructor(reason) {
+    super(`madmax requires tmux: ${reason}`);
+    this.reason = reason;
+    this.name = "MadmaxTmuxRequiredError";
+  }
+};
+function abortMadmaxRequiresTmux(reason) {
+  if (reason === "missing") {
+    console.error("[omc] Error: --madmax/--yolo on macOS requires tmux, but tmux is not installed.");
+    console.error("  Install it with: brew install tmux");
+  } else {
+    console.error("[omc] Error: --madmax/--yolo on macOS requires tmux, but launching tmux failed.");
+    console.error("  Verify tmux works: tmux -V && tmux new-session -d -s _omc_probe \\; kill-session -t _omc_probe");
+  }
+  process.exit(1);
+  throw new MadmaxTmuxRequiredError(reason);
+}
 function runClaude(cwd2, args, sessionId) {
   if (isPrintMode(args)) {
     runClaudeDirect(cwd2, args);
     return;
   }
-  const policy = resolveLaunchPolicy(process.env, args);
-  switch (policy) {
-    case "inside-tmux":
-      runClaudeInsideTmux(cwd2, args);
-      break;
-    case "outside-tmux":
-      runClaudeOutsideTmux(cwd2, args, sessionId);
-      break;
-    case "direct":
-      runClaudeDirect(cwd2, args);
-      break;
+  const requireTmux = process.platform === "darwin" && hasMadmaxFlag(args);
+  try {
+    if (requireTmux && !process.env.TMUX && !isTmuxAvailable()) {
+      abortMadmaxRequiresTmux("missing");
+    }
+    const policy = resolveLaunchPolicy(process.env, args, { requireTmux });
+    switch (policy) {
+      case "inside-tmux":
+        runClaudeInsideTmux(cwd2, args);
+        break;
+      case "outside-tmux":
+        runClaudeOutsideTmux(cwd2, args, sessionId, { requireTmux });
+        break;
+      case "direct":
+        if (requireTmux) {
+          abortMadmaxRequiresTmux("missing");
+        }
+        runClaudeDirect(cwd2, args);
+        break;
+    }
+  } catch (err) {
+    if (err instanceof MadmaxTmuxRequiredError) {
+      return;
+    }
+    throw err;
   }
 }
 function runClaudeInsideTmux(cwd2, args) {
@@ -89294,7 +89334,7 @@ function buildEnvExportPrefix(vars) {
   }
   return parts.length > 0 ? parts.join("; ") + "; " : "";
 }
-function runClaudeOutsideTmux(cwd2, args, _sessionId) {
+function runClaudeOutsideTmux(cwd2, args, _sessionId, options = {}) {
   const forwardedEnv = Object.fromEntries(
     TMUX_ENV_FORWARD.map((name) => [name, process.env[name]]).filter(([, value]) => value !== void 0)
   );
@@ -89306,6 +89346,9 @@ function runClaudeOutsideTmux(cwd2, args, _sessionId) {
   try {
     tmuxExec(["new-session", "-d", "-s", sessionName2, "-c", cwd2, claudeCmd], { stripTmux: true, stdio: "inherit" });
   } catch {
+    if (options.requireTmux) {
+      abortMadmaxRequiresTmux("launch-failed");
+    }
     runClaudeDirect(cwd2, args);
     return;
   }
@@ -89316,6 +89359,9 @@ function runClaudeOutsideTmux(cwd2, args, _sessionId) {
   try {
     tmuxExec(["attach-session", "-t", sessionName2], { stripTmux: true, stdio: "inherit" });
   } catch {
+    if (options.requireTmux) {
+      abortMadmaxRequiresTmux("launch-failed");
+    }
     try {
       tmuxExec(["has-session", "-t", sessionName2], { stripTmux: true, stdio: "ignore" });
       return;
